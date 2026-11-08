@@ -259,8 +259,11 @@ addEventListener("nest:tap", (ev) => {
     text = `电量水晶：今天恢复 ${t.recovery ?? "—"}%（${(BAND[t.band] || [, "等待数据"])[1]}）`;
     if (b.hrv != null) text += `\nHRV ${b.hrv}${b.hrv_avg7 ? `（前 7 天平均 ${b.hrv_avg7}）` : ""} · 静息心率 ${b.rhr ?? "—"}${b.rhr_avg7 ? `（平均 ${b.rhr_avg7}）` : ""}`;
   } else if (what === "flowers") {
-    const n = Math.max(0, Math.min(21, Math.round(t.strain || 0)));
-    text = `今天的活动开了 ${n} 朵花 🌸（负荷 ${t.strain ?? "—"}/21${t.steps ? `，${t.steps.toLocaleString()} 步` : ""}）`;
+    if (t.strain == null) text = "小花们在晒太阳 🌼";
+    else {
+      const n = Math.max(0, Math.min(21, Math.round(t.strain || 0)));
+      text = `今天的活动开了 ${n} 朵花 🌸（负荷 ${t.strain ?? "—"}/21${t.steps ? `，${t.steps.toLocaleString()} 步` : ""}）`;
+    }
   } else if (what === "bed") {
     text = s.hours != null ? `小床：昨晚 ${clockOf(s.start)} 睡、${clockOf(s.end)} 醒，睡了 ${s.hours} 小时，睡眠表现 ${s.performance ?? "—"}%` : "小床：还没有睡眠记录";
   } else if (what === "tree") {
@@ -306,6 +309,10 @@ function renderTiles(d) {
   $("#stages").innerHTML = ["sws", "rem", "light", "awake"].map((k) => `<i class="${k}" data-w="${(sh[k] || 0) / total * 100}"></i>`).join("");
   requestAnimationFrame(() => requestAnimationFrame(() => $("#stages").querySelectorAll("i").forEach((i) => { i.style.width = i.dataset.w + "%"; })));
 
+  // 活动数据可能被导出端藏起来（export_status.py 的 HIDE），没有就整张卡片不显示
+  const act = t.strain != null;
+  $("#t-strain").hidden = !act;
+  $(".tiles").classList.toggle("three", !act);
   const sc = { light: "#5bb8f5", moderate: "var(--green)", high: "var(--yellow)", all_out: "var(--red)" }[t.strain_band] || "var(--muted)";
   setRing($("#t-strain"), (t.strain || 0) / 21, sc);
   countUp($('[data-k="strain"]'), t.strain, 1);
@@ -446,7 +453,7 @@ function demoData(kind) {
   const iso = (ms) => new Date(ms + off * 60000).toISOString().slice(0, 16) + tz;
   const sleepEnd = kind === "sleep" ? now.getTime() - 20 * 3600000 : now.getTime() - 3 * 3600000;
   const nowMin = now.getHours() * 60 + now.getMinutes();
-  return {
+  const d = {
     v: 1, updated_at: iso(now.getTime() - 25 * 60000), tz,
     today: { date: days[days.length - 1].d, recovery: rec, band, calibrating: false, strain: { green: 12.4, yellow: 8.6, red: 4.1 }[band],
       strain_band: { green: "moderate", yellow: "light", red: "light" }[band], steps: 6234, workouts: [] },
@@ -462,6 +469,11 @@ function demoData(kind) {
     days, streaks: { regular_sleep: { green: 5, yellow: 2, red: 0 }[band], slept_7h: 1, wear: 30 },
     bio: { hrv: { green: 68, yellow: 50, red: 34 }[band], rhr: { green: 56, yellow: 60, red: 67 }[band], hrv_avg7: 52, rhr_avg7: 60 },
   };
+  // 和导出端一致：活动（负荷 / 步数 / 运动）先不给看
+  for (const k of ["strain", "strain_band", "steps", "workouts"]) delete d.today[k];
+  for (const k of ["avg_strain", "workouts"]) delete d.week[k];
+  for (const x of d.days) { delete x.strain; delete x.steps; }
+  return d;
 }
 
 // 3D 小岛 6 秒内没出来（网络慢 / 不支持 WebGL / ?flat），就用 2D 版

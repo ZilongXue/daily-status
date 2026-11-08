@@ -31,6 +31,7 @@ python3 -m http.server 8765 -d site        # 本地预览 http://localhost:8765/
 ## 页面上显示什么
 
 见 `~/Documents/health/whoop/export_status.py` 的 `FIELDS` 和 `build()`。改白名单就是改别人能看到的东西。
+暂时不给看的内容放在同一文件的 `HIDE` 里（目前藏着 `activity`：负荷、步数、运动记录），导出时就删掉，密文里也没有；页面发现没有这些字段会自动隐藏对应卡片。
 
 ## 安全边界（诚实版）
 
@@ -44,7 +45,7 @@ python3 -m http.server 8765 -d site        # 本地预览 http://localhost:8765/
 
 - 3D 小岛（`site/scene3d.js`）和小伙伴（`site/pet3d.js`：猫猫 / 企鹅 / 小鸡）都是用 Three.js 基础几何体现搭的原创模型。
   水晶 = 恢复，花 = 今天的负荷（开花数 = strain），小床 = 昨晚睡眠，树 = 作息规律度。
-- 动态 emoji：Google Noto Animated Emoji（CC BY 4.0），直接引用 fonts.gstatic.com。
+- 动态 emoji：Google Noto Animated Emoji（CC BY 4.0），直接引用 fonts.gstatic.com。署名放在 `site/index.html` 底部的注释里（页面上不显示文字）。
 - Three.js r170 / lottie-web 5.13.0 走 CDN（jsDelivr / cdnjs）。
 
 ## 每小时自动更新

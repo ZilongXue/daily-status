@@ -257,7 +257,8 @@ function update() {
   const k = 0.65 + 0.75 * (rec / 100);
   crystal.scale.set(k, k * 1.5, k);
   crystalLight.intensity = 1 + 3 * (rec / 100);
-  const n = Math.max(0, Math.min(21, Math.round(t.strain || 0)));
+  // 没有活动数据（被藏起来了）时，花只是装饰
+  const n = t.strain == null ? 9 : Math.max(0, Math.min(21, Math.round(t.strain || 0)));
   flowerList.forEach((x, i) => { x.target = i < n ? 1 : 0; });
   applySky(hisHour(d));
   if (prev !== mood) placePet();
