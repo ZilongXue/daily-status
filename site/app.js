@@ -192,7 +192,7 @@ function lines(d) {
   if (t.steps) out.push(`今天走了 ${t.steps.toLocaleString()} 步 👣`);
   if (st.regular_sleep >= 2) out.push(`已经连续 ${st.regular_sleep} 天作息规律，夸夸他！`);
   if (w.sleep_regularity != null && w.sleep_regularity < 70) out.push("这周作息有点乱，监督他按时睡觉 ⏰");
-  out.push("戳我一下试试 👉", "今天也想你了 💌");
+  out.push("戳我一下试试 👉", "按住我可以摸头哦", "点草地我会跑过去～", "今天也想你了 💌");
   return out;
 }
 const fmtDur = (m) => m >= 60 ? `${Math.floor(m / 60)} 小时${m % 60 ? " " + (m % 60) + " 分" : ""}` : `${m} 分钟`;
@@ -208,7 +208,6 @@ function renderScene(d, quiet) {
   const wrap = $("#pet-wrap");
   const mood = moodOf(d);
   wrap.className = "pet-wrap mood-" + (mood === "sleep" ? "tired" : mood);
-  $("#sprite").src = mood === "happy" ? "assets/monster_48_front_alt.png" : "assets/monster_48_front.png";
   if (!quiet) { lineIdx = 0; say(lines(d)[0]); }
   renderPokes();
 }
@@ -235,11 +234,25 @@ $("#pet").addEventListener("click", () => {
   poked(r.left + r.width / 2, r.top + r.height * 0.35);
 });
 
+// 换小伙伴时，2D 备用版和锁屏也跟着换
+const PET_EMOJI = { cat: "🐱", penguin: "🐧", chick: "🐥" };
+function syncPetEmoji(kind) { document.querySelectorAll("[data-pet-emoji]").forEach((e) => { e.textContent = PET_EMOJI[kind] || "🐱"; }); }
+syncPetEmoji(store.get("nest.species"));
+addEventListener("nest:species", (ev) => syncPetEmoji(ev.detail.kind));
+
 // 3D 小岛上点到的东西（scene3d.js 派发）
 addEventListener("nest:tap", (ev) => {
   const { what, x, y } = ev.detail;
   if (!DATA) return;
-  if (what === "pet") { poked(x, y); return; }
+  if (what === "pet") {
+    poked(x, y);
+    if (ev.detail.react === "wave") say("嗨～ 👋 今天也想你了");
+    if (ev.detail.react === "blush") say("被你戳得脸红了 ☺️");
+    if (ev.detail.react === "stir") say("唔…再睡五分钟…（他大概真的在睡觉）");
+    return;
+  }
+  if (what === "pet-hold") { hearts(x, y, 10); say("被摸头了，好舒服～ 💕"); return; }
+  if (what === "ground-sleep") { say("嘘——小声点，它在充电中 🌙"); return; }
   const t = DATA.today || {}, s = DATA.last_sleep || {}, w = DATA.week || {}, b = DATA.bio || {}, st = DATA.streaks || {};
   let text = "";
   if (what === "crystal") {

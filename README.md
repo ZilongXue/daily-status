@@ -40,6 +40,13 @@ python3 -m http.server 8765 -d site        # 本地预览 http://localhost:8765/
 - 只在 Mac 醒着的时候更新；Mac 睡着时数据停在最后一次同步。要 24 小时更新需要把同步搬到云端（cron），
   但那样 refresh token 就得放到云上，而且 Mac 上的同步要停掉（refresh token 会轮换，只能有一个写入方）。
 
-## 素材
+## 页面上的东西
 
-- 小浣熊：isaiah658 “50+ Monsters Pack” #48，CC0（https://opengameart.org/content/50-monsters-pack-2d）
+- 3D 小岛（`site/scene3d.js`）和小伙伴（`site/pet3d.js`：猫猫 / 企鹅 / 小鸡）都是用 Three.js 基础几何体现搭的原创模型。
+  水晶 = 恢复，花 = 今天的负荷（开花数 = strain），小床 = 昨晚睡眠，树 = 作息规律度。
+- 动态 emoji：Google Noto Animated Emoji（CC BY 4.0），直接引用 fonts.gstatic.com。
+- Three.js r170 / lottie-web 5.13.0 走 CDN（jsDelivr / cdnjs）。
+
+## 每小时自动更新
+
+`hourly.sh` 由 `~/Library/LaunchAgents/com.zilong.whoop-sync.plist` 每小时调用：先 `whoop.py sync`，成功后 `publish.py`。

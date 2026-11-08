@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
 <title>小窝</title>
-<link rel="icon" href="assets/monster_48_front.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐱</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
@@ -24,11 +24,11 @@
 <section id="lock" class="lock" hidden>
   <div class="lock-card">
     <div class="lock-pet">
-      <img src="assets/monster_48_front.png" alt="" class="sprite sleeping">
+      <span class="sprite emoji-pet sleeping" data-pet-emoji>🐱</span>
       <span class="zzz"><i>z</i><i>z</i><i>Z</i></span>
     </div>
     <h1 class="title">Zilong 的小窝</h1>
-    <p class="muted">小浣熊在门口睡着了，说出暗号叫醒它</p>
+    <p class="muted">小家伙在门口睡着了，说出暗号叫醒它</p>
     <form id="lock-form" autocomplete="off">
       <input id="pw" type="password" placeholder="暗号" autocomplete="current-password" required>
       <label class="remember"><input id="remember" type="checkbox" checked> 记住这台设备</label>
@@ -51,11 +51,14 @@
     <div class="hill"></div>
     <div class="scene3d" id="scene3d"></div>
     <div class="bubble" id="bubble"></div>
-    <button class="px-toggle" id="px-toggle" type="button">像素</button>
-    <p class="hint small" id="hint">左右拖动转小岛 · 点点岛上的东西</p>
+    <button class="px-toggle" id="px-toggle" type="button">高清</button>
+    <div class="species" role="group" aria-label="换个小伙伴">
+      <button type="button" data-species="cat" title="猫猫">🐱</button><button type="button" data-species="penguin" title="企鹅">🐧</button><button type="button" data-species="chick" title="小鸡">🐥</button>
+    </div>
+    <p class="hint small" id="hint">点它 · 按住摸摸头 · 点草地它会跑过去 · 左右拖动转小岛</p>
     <div class="pet-wrap" id="pet-wrap">
       <button class="pet" id="pet" aria-label="戳一下">
-        <img src="assets/monster_48_front.png" alt="小浣熊" class="sprite" id="sprite">
+        <span class="sprite emoji-pet" id="sprite" data-pet-emoji>🐱</span>
         <span class="zzz" id="pet-zzz"><i>z</i><i>z</i><i>Z</i></span>
         <span class="sparkles" id="sparkles"><i>✦</i><i>✧</i><i>✦</i></span>
       </button>
@@ -111,7 +114,7 @@
 
   <footer class="foot small muted">
     <p>数据来自 Zilong 的可穿戴设备（经 WHOOP API 读取），每小时同步一次，非 WHOOP 官方页面。</p>
-    <p>小浣熊：isaiah658 “50+ Monsters Pack”（CC0）· 动态 emoji：Google Noto Animated Emoji（CC BY 4.0）</p>
+    <p>小岛和小伙伴是用 Three.js 现搭的原创模型 · 动态 emoji：Google Noto Animated Emoji（CC BY 4.0）</p>
     <p><a href="#" id="logout">退出这台设备</a></p>
   </footer>
 </main>
