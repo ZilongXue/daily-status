@@ -2,6 +2,7 @@
 // 全部程序生成，没有外部模型。scene3d.js 负责小伙伴和互动，这里只管环境。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=6";
 
 export const SEA_Y = -0.85;   // 海面高度（草地表面是 y = 0）
 export const ISLAND_R = 3.25; // 草地的最小半径（装饰的位置都按这个算）
@@ -12,15 +13,12 @@ const DOCK_DIR = new THREE.Vector3(Math.cos(DOCK_A), 0, Math.sin(DOCK_A));
 export const DOCK = {
   dir: DOCK_DIR,
   base: DOCK_DIR.clone().multiplyScalar(2.45),
-  tip: DOCK_DIR.clone().multiplyScalar(5.6),
-  bobber: DOCK_DIR.clone().multiplyScalar(7.1).setY(SEA_Y),
+  tip: DOCK_DIR.clone().multiplyScalar(6.2),
+  bobber: DOCK_DIR.clone().multiplyScalar(7.9).setY(SEA_Y),
 };
 
-const WF_A = Math.atan2(-1.3, 2.75); // 瀑布的角度（树旁边）
-// 哪里是悬崖（0 = 缓坡草地，1 = 陡崖）：岛的背面一大段 + 瀑布那一小段
 const angDist = (a, b) => Math.abs(((a - b + Math.PI * 3) % (Math.PI * 2)) - Math.PI);
 const bump = (d, w) => Math.max(0, 1 - (d / w) ** 2);
-const mainCliff = (a) => Math.min(1, 1.15 * bump(angDist(a, -Math.PI / 2 - 0.25), 1.15) + bump(angDist(a, WF_A), 0.45));
 
 // 一维循环噪声：给岛的边缘一点起伏
 const hash1 = (n) => { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); };
@@ -167,32 +165,29 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   const top = { material: { color: GRASS0.clone() } };
   const snowU = { value: 0 };
   updaters.push(() => { snowU.value = Math.max(0, Math.min(1, (top.material.color.r - GRASS0.r) / (SNOWC.r - GRASS0.r))); });
-  const isl = makeIsland({ R0: ISLAND_R, seed: 1, cliff: mainCliff, wob: 0.13 });
-  const ground = new THREE.Mesh(isl.geo, terrainMaterial(toon, snowU));
-  ground.receiveShadow = true;
+  const isl = buildMainIsland({ material: terrainMaterial(toon, snowU) });
+  const ground = isl.mesh;
   env.add(tag(ground, "ground"));
-  // 崖壁上嵌几块大石头，打破平整感
-  for (let i = 0; i < 16; i++) {
-    const a = -Math.PI / 2 - 1.2 + (i / 15) * 2.6 + (hash1(i) - 0.5) * 0.15;
-    if (mainCliff(a) < 0.5) continue;
-    const e = isl.edge(a), rr = e + 0.12 + hash1(i + 3) * 0.2;
-    const m = mk(new THREE.DodecahedronGeometry(0.16 + hash1(i + 1) * 0.16, 0), i % 3 ? 0xb5a493 : 0xcaa27a, 0.025);
-    m.position.set(Math.cos(a) * rr, isl.height(rr, a) + 0.05, Math.sin(a) * rr);
-    m.rotation.set(hash1(i + 5) * 3, hash1(i + 6) * 3, 0);
-    m.scale.y = 0.8;
-    env.add(m);
-  }
-  // 沙滩上的小石头和贝壳（顺着真实的海岸线摆）
+  // 沙滩上的小石头和贝壳（顺着真实的海岸线摆，避开码头和河口）
   const shellCols = [0xffc4d0, 0xfff1e0, 0xffd9a8];
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 26; i++) {
     const a = i * 2.39 + 0.4;
-    if (angDist(a, DOCK_A) < 0.2 || mainCliff(a) > 0.4) continue;
-    const r = isl.shoreR(a) - 0.25 - hash1(i + 9) * 0.35;
+    const r = isl.shoreR(a) - 0.25 - hash1(i + 9) * 0.45;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r, y = mainHeight(x, z);
+    if (angDist(a, DOCK_A) < 0.15 || isl.riverD(x, z) < 0.7 || y > SEA_Y + 0.3) continue;
     const isShell = i % 3 === 0;
     const m = isShell ? mk(new THREE.ConeGeometry(0.07, 0.06, 7), shellCols[i % 3], 0.015)
       : mk(new THREE.DodecahedronGeometry(0.07 + hash1(i) * 0.09, 0), 0xb7ada4, 0.02);
-    m.position.set(Math.cos(a) * r, isl.height(r, a) + 0.03, Math.sin(a) * r);
+    m.position.set(x, y + 0.03, z);
     m.rotation.set(hash1(i + 3) * 3, hash1(i + 4) * 3, 0);
+    env.add(m);
+  }
+  // 海里几块大圆石（有的半露出水面），比堆在崖上的碎石自然
+  for (const [x, z, s] of [[-5.9, -2.2, 0.5], [-5.4, -3.6, 0.32], [4.9, -4.6, 0.45], [5.8, -3.2, 0.3], [-4.2, 3.9, 0.35]]) {
+    const m = mk(new THREE.DodecahedronGeometry(s, 1), 0xb9ab9d, 0.03);
+    m.scale.y = 0.7;
+    m.position.set(x, SEA_Y + s * 0.15, z);
+    m.rotation.y = x;
     env.add(m);
   }
 
@@ -243,68 +238,42 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   env.add(tag(sea, "sea"));
   updaters.push((t) => { seaU.uT.value = t; });
 
-  /* ------------------------------------------------------------ 瀑布：树旁边的小泉眼，流过草地，从崖边落进海里 */
-  const wfEdge = isl.edge(WF_A);
-  const wfDir = new THREE.Vector3(Math.cos(WF_A), 0, Math.sin(WF_A));
-  const flowU = { uT: { value: 0 } };
-  const flowMat = (along) => new THREE.ShaderMaterial({
-    uniforms: flowU, transparent: true,
-    vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
-    fragmentShader: `varying vec2 vUv; uniform float uT;
-      void main(){
-        float v = ${along === "y" ? "vUv.y" : "vUv.x"}, u = ${along === "y" ? "vUv.x" : "vUv.y"};
-        float s = fract(v*3.0 + uT*${along === "y" ? "1.8" : "-0.9"} + sin(u*12.0)*0.08);
-        vec3 c = mix(vec3(0.55,0.88,0.98), vec3(0.83,0.97,1.0), step(0.6, s));
-        float edge = smoothstep(0.0, 0.12, u) * smoothstep(1.0, 0.88, u);
-        c = mix(vec3(1.0), c, edge);
-        gl_FragColor = vec4(c, 0.93);
-      }`,
-  });
-  // 泉眼：一圈小石头围着
-  const spring = new THREE.Group();
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2, r = mk(new THREE.DodecahedronGeometry(0.11, 0), 0xb9b0a6, 0.02);
-    r.position.set(Math.cos(a) * 0.24, 0.05, Math.sin(a) * 0.24);
-    spring.add(r);
+  /* ------------------------------------------------------------ 瀑布、水潭、小河、小桥（island3d.js） */
+  const water = buildWater({ toon, outlined });
+  env.add(water.group);
+  updaters.push((t) => water.update(t));
+
+  /* ------------------------------------------------------------ 高台上的树 */
+  const roundTree = (r, c1, c2) => {
+    const g = new THREE.Group();
+    const tr = mk(new THREE.CylinderGeometry(0.07, 0.11, 0.6, 7), 0x8a5a3b, 0.02);
+    tr.position.y = 0.3;
+    g.add(tr);
+    for (const [dx, dy, dz, rr, c] of [[0, 0.85, 0, r, c1], [r * 0.55, 0.72, r * 0.2, r * 0.7, c2], [-r * 0.5, 0.75, r * 0.15, r * 0.68, c2], [0.05, 1.1, -r * 0.3, r * 0.65, c1]]) {
+      const m = mk(new THREE.SphereGeometry(rr, 14, 10), c, 0.03);
+      m.position.set(dx, dy, dz); m.scale.y = 0.88;
+      g.add(m);
+    }
+    return g;
+  };
+  const pine = (h, c) => {
+    const g = new THREE.Group();
+    const tr = mk(new THREE.CylinderGeometry(0.05, 0.08, 0.3, 6), 0x8a5a3b, 0.015);
+    tr.position.y = 0.15; g.add(tr);
+    for (let i = 0; i < 3; i++) {
+      const cn = mk(new THREE.ConeGeometry(0.42 - i * 0.1, h * 0.45, 9), c, 0.025);
+      cn.position.y = 0.35 + i * h * 0.24; g.add(cn);
+    }
+    return g;
+  };
+  for (const [x, z, kind, s] of [[-2.45, -4.35, "r", 1.0], [-0.6, -5.2, "r", 1.15], [2.65, -4.85, "r", 0.85], [-3.0, -4.75, "p", 1.0],
+    [1.6, -5.4, "p", 1.15], [-1.1, -5.6, "p", 0.9], [-2.6, -5.4, "r", 0.8]]) {
+    const t = kind === "r" ? roundTree(0.48, 0x5cb86d, 0x6fcf86) : pine(1.3, 0x4fa86a);
+    t.position.set(x, mainHeight(x, z) - 0.03, z);
+    t.scale.setScalar(s);
+    t.rotation.y = x * 3;
+    env.add(t);
   }
-  const pool = new THREE.Mesh(new THREE.CircleGeometry(0.22, 16), flowMat("x"));
-  pool.rotation.x = -Math.PI / 2; pool.position.y = 0.04;
-  spring.add(pool);
-  spring.position.copy(wfDir).multiplyScalar(2.55);
-  env.add(tag(spring, "spring"));
-  // 溪流：从泉眼到崖边
-  const streamLen = wfEdge - 2.55 + 0.05;
-  const stream = new THREE.Mesh(new THREE.PlaneGeometry(streamLen, 0.24), flowMat("x"));
-  stream.rotation.set(-Math.PI / 2, 0, -WF_A);
-  stream.position.copy(wfDir).multiplyScalar(2.55 + streamLen / 2).setY(0.02);
-  env.add(stream);
-  // 瀑布本身：一片从崖边往下弯的水帘
-  const fallGeo = new THREE.PlaneGeometry(0.32, 1.0, 1, 8);
-  { const p = fallGeo.attributes.position;
-    for (let i = 0; i < p.count; i++) { const y = p.getY(i), k = 0.5 - y; p.setZ(i, 0.25 * k * k + 0.05); p.setY(i, y - 0.5); } }
-  const fall = new THREE.Mesh(fallGeo, flowMat("y"));
-  fall.material.side = THREE.DoubleSide;
-  fall.position.copy(wfDir).multiplyScalar(wfEdge + 0.02).setY(0.02);
-  fall.rotation.y = Math.PI / 2 - WF_A;
-  env.add(fall);
-  // 瀑布底下的水花
-  const foamBalls = Array.from({ length: 5 }, (_, i) => {
-    const b = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true }));
-    b.userData.p = i / 5;
-    env.add(b);
-    return b;
-  });
-  const fallFoot = wfDir.clone().multiplyScalar(isl.shoreR(WF_A) + 0.1).setY(SEA_Y);
-  updaters.push((t) => {
-    flowU.uT.value = t;
-    foamBalls.forEach((b, i) => {
-      const p = (t * 0.8 + b.userData.p) % 1;
-      const a = i * 1.3;
-      b.position.set(fallFoot.x + Math.cos(a) * p * 0.35, SEA_Y + 0.05 + Math.sin(p * Math.PI) * 0.18, fallFoot.z + Math.sin(a) * p * 0.35);
-      b.scale.setScalar(0.6 + p);
-      b.material.opacity = 1 - p;
-    });
-  });
 
   /* ------------------------------------------------------------ 码头 */
   const dock = new THREE.Group();
@@ -359,19 +328,23 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
       transformed.x += sin(uWind*1.9 + ip.x*1.7 + ip.z*1.1) * hh*hh * 0.035;
       transformed.z += cos(uWind*1.5 + ip.z*1.9) * hh*hh * 0.02;`);
   };
-  const TUFTS = 230;
+  const TUFTS = 320;
   const grass = new THREE.InstancedMesh(tuftGeo, grassMat, TUFTS);
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
   const gc = [0x5fb85a, 0x6fc865, 0x83d470, 0x4fa54f].map((c) => new THREE.Color(c));
   let n = 0, seed = 1;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   while (n < TUFTS) {
-    const a = rnd() * Math.PI * 2, r = Math.sqrt(rnd()) * (isl.edge(a) - 0.12);
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    const x = -4.3 + rnd() * 8.6, z = -6.2 + rnd() * 10.2;
+    const h = mainHeight(x, z);
+    const onMeadow = Math.abs(h) < 0.004 && isl.meadowSD(x, z) < -0.15;
+    const onUpper = h > 1.45 && isl.upperSD(x, z) < -0.25;
+    if (!onMeadow && !onUpper) continue;
+    if (isl.riverD(x, z) < 0.65 || Math.hypot(x - POOL.x, z - POOL.z) < 1.0) continue;
+    const r = Math.hypot(x, z);
     if (Math.hypot(x - 0.35, z - 0.75) < 0.7) continue;         // 小伙伴的家
     if (Math.hypot(x + 1.55, z + 0.85) < 1.05) continue;        // 床
-    if (angDist(Math.atan2(z, x), WF_A) < 0.2 && r > 2.2) continue; // 溪流
-    ps.set(x, 0, z);
+    ps.set(x, h, z);
     q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rnd() * 6.3);
     const s = 0.7 + rnd() * 0.7;
     sc.set(s, s * (0.8 + rnd() * 0.5), s);
@@ -385,14 +358,14 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   updaters.push((t) => { windU.value = t; });
 
   /* ------------------------------------------------------------ 小灌木 */
-  for (const [x, z, s] of [[-2.95, -1.25, 0.9], [3.05, -0.15, 0.75], [-1.05, 2.95, 0.8], [1.85, 2.75, 0.65]]) {
+  for (const [x, z, s] of [[-3.75, 0.35, 0.9], [3.6, -0.6, 0.8], [-1.35, 3.1, 0.8], [2.1, 2.9, 0.7], [-2.5, -3.9, 0.85], [0.4, -4.35, 0.75], [2.85, -4.05, 0.7], [3.3, -2.2, 0.6]]) {
     const b = new THREE.Group();
     for (const [dx, dy, dz, r, c] of [[0, 0.2, 0, 0.3, 0x5fae5f], [0.24, 0.14, 0.06, 0.22, 0x6fc06a], [-0.2, 0.13, 0.08, 0.2, 0x58a85a]]) {
       const m = mk(new THREE.SphereGeometry(r, 12, 9), c, 0.025);
       m.position.set(dx, dy, dz); m.scale.y = 0.85;
       b.add(m);
     }
-    b.position.set(x, 0, z); b.scale.setScalar(s);
+    b.position.set(x, mainHeight(x, z), z); b.scale.setScalar(s);
     b.rotation.y = Math.atan2(x, z);
     env.add(b);
   }
@@ -673,7 +646,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
     }
   });
 
-  return { top, ground, sea, dock, env, update, setSky, splash, SEA_Y, heightAt: (x, z) => isl.height(Math.hypot(x, z), Math.atan2(z, x)) };
+  return { top, ground, sea, dock, env, update, setSky, splash, SEA_Y, heightAt: mainHeight };
 }
 
 function makeGull(mk) {

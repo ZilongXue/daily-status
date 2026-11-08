@@ -1,8 +1,8 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=4";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=4";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=6";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=6";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };

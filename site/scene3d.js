@@ -4,10 +4,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=4";
-import { buildDino } from "./dino3d.js?v=4";
-import { createDecor } from "./decor3d.js?v=4";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=4";
+import { buildPet, SPECIES } from "./pet3d.js?v=6";
+import { buildDino } from "./dino3d.js?v=6";
+import { createDecor } from "./decor3d.js?v=6";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=6";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -29,10 +29,10 @@ host.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
-camera.position.set(0, 5.2, 12.5);
+camera.position.set(0, 6.2, 14.5);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.55, 0);
+controls.target.set(0, 0.6, -0.7);
 controls.enablePan = false;
 controls.enableZoom = false;
 controls.enableDamping = true;
@@ -229,7 +229,7 @@ const sun = new THREE.DirectionalLight(0xffffff, 2.2);
 sun.position.set(5, 8, 6);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
-Object.assign(sun.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 1, far: 25 });
+Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 1, far: 30 });
 sun.shadow.bias = -0.0015;
 sun.shadow.normalBias = 0.02;
 // 影子：小伙伴、树、床、装饰投影（描边、草、花这些小东西不投，省性能）
@@ -448,7 +448,8 @@ function resize() {
   renderer.setSize(w, h);
   renderer.domElement.style.imageRendering = pixelMode ? "pixelated" : "auto";
   camera.aspect = w / h;
-  camera.position.setLength(w < 500 ? 18 : 13.5);
+  const off = camera.position.clone().sub(controls.target).setLength(w < 500 ? 21 : 16);
+  camera.position.copy(controls.target).add(off);
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(host);
@@ -708,7 +709,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=4").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=6").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
