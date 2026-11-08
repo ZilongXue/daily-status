@@ -23,6 +23,7 @@
   let me = store.get(WHO_KEY);               // "her" | "me"
   let events = [], lastId = 0, token = null, devKey = null, started = false;
   let weapon = "fist", pendingHits = 0, hitTimer = 0, combo = 0, comboTimer = 0, posting = false;
+  let pushState = "off"; // off | on | unsupported（网页推送，只给 Zilong 用）
   window.NEST_MODE = "normal";
 
   /* ------------------------------------------------------------ keys & api */
@@ -145,6 +146,7 @@
       A.push(`<button data-act="note">💌 留言</button>`);
     } else {
       A.push(`<button data-act="sorry">🙇 认错</button>`, `<button data-act="flower">🌹 送花</button>`, `<button data-act="note">💌 写纸条</button>`);
+      if (pushState !== "unsupported") A.push(pushState === "on" ? `<button data-act="push-test">🔔 通知已开<small>点一下测试</small></button>` : `<button data-act="push">🔔 开启通知</button>`);
     }
     A.push(`<button data-act="mute" class="mini" title="声音">${store.get(MUTE_KEY) === "1" ? "🔇" : "🔈"}</button>`);
     $("#actions").innerHTML = A.join("");
@@ -225,7 +227,7 @@
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("button");
     if (!b) return;
-    if (b.dataset.who) { me = b.dataset.who; store.set(WHO_KEY, me); render(); renderTimeline(); return; }
+    if (b.dataset.who) { me = b.dataset.who; store.set(WHO_KEY, me); if (me === "me") await checkPush(); render(); renderTimeline(); return; }
     if (b.dataset.weapon) { weapon = b.dataset.weapon; render(); sfx("pop"); return; }
     if (b.dataset.food) {
       const s = state();
@@ -242,6 +244,8 @@
     const act = b.dataset.act;
     if (!act || posting) return;
     if (act === "mute") { store.set(MUTE_KEY, store.get(MUTE_KEY) === "1" ? "0" : "1"); render(); return; }
+    if (act === "push") { enablePush(); return; }
+    if (act === "push-test") { pushTest(); return; }
     if (act === "feed") {
       const t = $("#tray");
       if (!t.hidden && t.classList.contains("foods")) { t.hidden = true; return; }
@@ -301,10 +305,56 @@
   $("#pet").addEventListener("click", (ev) => hit(ev.clientX, ev.clientY), true);
   addEventListener("pagehide", flushHits);
 
+  /* ------------------------------------------------------------ 网页推送（Zilong 的安卓 Chrome） */
+  function idb() {
+    return new Promise((ok, bad) => {
+      const r = indexedDB.open("nest", 1);
+      r.onupgradeneeded = () => r.result.createObjectStore("kv");
+      r.onsuccess = () => ok(r.result); r.onerror = () => bad(r.error);
+    });
+  }
+  async function idbSet(k, v) { const d = await idb(); return new Promise((ok) => { const x = d.transaction("kv", "readwrite"); x.objectStore("kv").put(v, k); x.oncomplete = ok; x.onerror = ok; }); }
+  const vapidKey = () => { const s = (window.NEST_VAPID || "").replace(/-/g, "+").replace(/_/g, "/"); return Uint8Array.from(atob(s + "=".repeat((4 - s.length % 4) % 4)), (c) => c.charCodeAt(0)); };
+
+  async function checkPush() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !window.NEST_VAPID) { pushState = "unsupported"; return; }
+    try {
+      const reg = await navigator.serviceWorker.getRegistration();
+      pushState = reg && (await reg.pushManager.getSubscription()) && Notification.permission === "granted" ? "on" : "off";
+    } catch { pushState = "off"; }
+  }
+  async function enablePush() {
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") { say("没拿到通知权限：在浏览器设置里允许这个网站发通知再试一次"); return; }
+      const reg = await navigator.serviceWorker.register("sw.js");
+      await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: vapidKey() }));
+      // 给 service worker 用：令牌、解纸条的密钥、从哪条开始算"新动态"
+      await idbSet("token", await getToken());
+      await idbSet("key", b64e(await crypto.subtle.exportKey("raw", await key())));
+      await idbSet("lastId", lastId);
+      const r = await fetch(API + "/subscribe", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: "me", sub: sub.toJSON() }) });
+      if (!r.ok) throw new Error("subscribe " + r.status);
+      pushState = "on"; render();
+      say("通知开好了 🔔 马上发一条测试");
+      pushTest();
+    } catch (e) { say("开启通知失败：" + (e.message || e)); }
+  }
+  async function pushTest() {
+    try {
+      const r = await fetch(API + "/push-test", { method: "POST", headers: { authorization: "Bearer " + (await getToken()) } });
+      const j = await r.json();
+      say(j.sent ? "测试推送已发出，看看手机通知栏 📱" : "没有发出去：可能需要重新开启通知");
+      if (!j.sent) { pushState = "off"; render(); }
+    } catch { say("测试推送失败，网络好像不太好"); }
+  }
+
   /* ------------------------------------------------------------ boot：解锁后才开始 */
   async function start() {
     if (started || !(await key())) return;
     started = true;
+    if (me === "me") await checkPush();
     render();
     await poll(true);
     setInterval(() => { if (!document.hidden) poll(); }, 12000);

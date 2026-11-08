@@ -6,6 +6,8 @@ routes = [{ pattern = "api.hizilo.com", custom_domain = true }]
 
 [vars]
 ALLOWED_ORIGINS = "https://zilongxue.github.io,http://localhost:8765"
+VAPID_PUBLIC = "BEwUcq46SjCXij40o5vxV5bVg6lkc6dnu9-PYeo1M2-4o-ufNaCAlPe4hv7c1dtLnw1wGZt9x_F5jfUVB0MaNHQ"
+VAPID_SUBJECT = "https://zilongxue.github.io/daily-status/"
 
 [[d1_databases]]
 binding = "DB"
@@ -14,4 +16,4 @@ database_id = "a61f9f69-257b-48fd-8285-80ee9bd051c8"
 
 # 密钥（不写在这里，用 `wrangler secret put` 设置）：
 #   ACCESS_HASH  = sha256(访问令牌) 的十六进制；令牌由页面密码派生，见 ../publish.py --api-hash
-#   BARK_KEY     = Bark App 里的设备 key（可选；没有就不推送）
+#   VAPID_PRIVATE_JWK = 网页推送的 VAPID 私钥（JWK），本地副本在 ../state/vapid_private.jwk（不进仓库）
