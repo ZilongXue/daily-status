@@ -24,6 +24,7 @@ const RIVER = [[-1.25, -2.95], [-1.95, -2.75], [-2.6, -2.35], [-3.1, -1.75], [-3
 const CREEK = [[-1.6, -4.45], [-1.42, -4.05], [-1.25, -3.68]];
 export const FALL_TOP = { x: -1.25, z: -3.54 };
 export const BRIDGE = { x: -3.1, z: -1.75 };
+export const FARM = { x: 0.95, z: -4.75 }; // 高台上的菜地中心（高度 = 高台顶）
 // 土路：家 → 码头，家 → 床，家 → 小桥
 const PATHS = [[[0.35, 0.75], [0.5, 1.6], [0.6, 2.45], [0.75, 3.4]], [[0.35, 0.75], [-0.4, 0.15], [-1.1, -0.35], [-2.0, -0.95], [-2.65, -1.35]], [[0.35, 0.75], [1.2, 0.2], [2.0, -0.2]]];
 
@@ -99,7 +100,8 @@ function landH(x, z) {
   const dU = upperSD(x, z) + fbm(x * 1.3 + 3, z * 1.3) * 0.07;
   if (dU < wU) {
     const k = 1 - smooth(0, wU, dU);
-    const hill = 0.75 * Math.exp(-((x + 0.9) ** 2 + (z + 5.0) ** 2) / 1.6) + 0.35 * Math.exp(-((x - 2.4) ** 2 + (z + 5.1) ** 2) / 0.6);
+    const pad = smooth(1.15, 1.9, Math.hypot((x - FARM.x) / 1.25, (z - FARM.z) / 0.95)); // 菜地那块是平的
+    const hill = pad * (0.75 * Math.exp(-((x + 0.9) ** 2 + (z + 5.0) ** 2) / 1.6) + 0.35 * Math.exp(-((x - 2.4) ** 2 + (z + 5.1) ** 2) / 0.6));
     const top = UPPER_H + hill * smooth(0.1, -0.9, dU);
     const base = h;
     const prof = wU > 1 ? k * k * (3 - 2 * k) : Math.pow(k, 0.5);

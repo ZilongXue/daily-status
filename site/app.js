@@ -168,7 +168,7 @@ function renderClocks(d) {
   $("#clock-his").innerHTML = `他那边 <b>${hm(his)}</b>`;
   $("#clock-you").innerHTML = sameTz ? "" : `你那边 <b>${pad(you.getHours())}:${pad(you.getMinutes())}</b>`;
   $("#synced").textContent = "数据更新于 " + ago(d.updated_at);
-  paintSky(his.getUTCHours() + his.getUTCMinutes() / 60);
+  paintSky(you.getHours() + you.getMinutes() / 60); // 天色跟着"正在看的人"自己的时间走（对方那边看对面的小岛）
 }
 
 function paintSky(h) {

@@ -4,10 +4,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=7";
-import { buildDino } from "./dino3d.js?v=7";
-import { createDecor } from "./decor3d.js?v=7";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=7";
+import { buildPet, SPECIES } from "./pet3d.js?v=8";
+import { buildDino } from "./dino3d.js?v=8";
+import { createDecor, encodePos } from "./decor3d.js?v=8";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=8";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -238,7 +238,7 @@ sun.shadow.normalBias = 0.02;
 // 影子：小伙伴、树、床、装饰投影（描边、草、花这些小东西不投，省性能）
 function castShadows() {
   for (const o of [tree, bed, ...(pet ? [pet.root] : []), ...extraCasters, ...castActors]) o.traverse((m) => {
-    if (m.isMesh && !m.material.side) m.castShadow = true; // 描边是 BackSide（side=1），不投影
+    if (m.isMesh && !m.material.side && !m.userData.noShadow && !m.material.transparent) m.castShadow = true; // 描边是 BackSide（side=1），不投影；透明的也不投
   });
 }
 const extraCasters = [], castActors = [];
@@ -259,6 +259,7 @@ function hisHour(d) {
   const t = new Date(Date.now() + off * 60000);
   return t.getUTCHours() + t.getUTCMinutes() / 60;
 }
+const localHour = () => { const t = new Date(); return t.getHours() + t.getMinutes() / 60; };
 let skyKind = "day";
 function applySky(h) {
   const k = h >= 5 && h < 7.5 ? "dawn" : h >= 7.5 && h < 17 ? "day" : h >= 17 && h < 19.5 ? "dusk" : "night";
@@ -302,7 +303,12 @@ function setSpecies(k) {
   dispatchEvent(new CustomEvent("nest:species", { detail: { kind } }));
 }
 
-const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet });
+const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_house", "cat_tower", "hammock", "star_lamp", "carousel", "hot_air_heart",
+  "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
+const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
+  has: (id) => GACHA_IDS.has(id),
+  build: async (id) => (await import("./gacha3d.js?v=8")).buildGachaDecor(id, { toon, outlined }),
+} });
 
 /* ---------------------------------------------------------------- state from data */
 const BAND_HEX = { green: 0x3fbf7f, yellow: 0xf4b33a, red: 0xef5d5d };
@@ -324,11 +330,11 @@ function update() {
   // 没有活动数据（被藏起来了）时，花只是装饰
   const n = t.strain == null ? 9 : Math.max(0, Math.min(21, Math.round(t.strain || 0)));
   flowerList.forEach((x, i) => { x.target = i < n ? 1 : 0; });
-  applySky(hisHour(d));
+  applySky(localHour());
   if (prev !== mood) placePet();
 }
 addEventListener("nest:update", update);
-setInterval(() => window.NEST && applySky(hisHour(window.NEST.data)), 60000);
+setInterval(() => applySky(localHour()), 60000);
 
 const UP = new THREE.Vector3(0, 1, 0);
 // 躺姿：头朝枕头（床的 -x），脸朝上偏向一侧；镜头转到另一边时它会翻个身，让你总能看到脸
@@ -382,6 +388,7 @@ function screenOf(v) {
 function headWorld() { return pet.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.35, 0)); }
 
 renderer.domElement.addEventListener("pointermove", (e) => {
+  if (edit && edit.drag) { editMove(e); return; }
   const r = renderer.domElement.getBoundingClientRect();
   pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
   pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
@@ -390,6 +397,7 @@ renderer.domElement.addEventListener("pointermove", (e) => {
 });
 renderer.domElement.addEventListener("pointerleave", () => { pointer.active = false; });
 renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (edit) { editDown(e); return; }
   downAt = [e.clientX, e.clientY];
   const r = renderer.domElement.getBoundingClientRect();
   pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
@@ -403,6 +411,7 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
 function stopHold() { holding = false; }
 addEventListener("pointerup", () => { clearTimeout(holdTimer); if (holding) { stopHold(); downAt = null; } });
 renderer.domElement.addEventListener("pointerup", (e) => {
+  if (edit) { editUp(); return; }
   if (!downAt || holding) return;
   const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 8;
   downAt = null;
@@ -411,6 +420,7 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   const hit = pick(e);
   if (!hit) return;
   const what = hit.object.userData.what;
+  if (what === "gacha" || what === "farm" || what === "xmas") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what, x: e.clientX, y: e.clientY } })); return; }
   if (what === "her" || what === "pony") {
     const at = what === "her" ? cast.kittenScreen() : { x: e.clientX, y: e.clientY };
     dispatchEvent(new CustomEvent("nest:tap", { detail: { what, ...at } }));
@@ -465,6 +475,7 @@ const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 function animate(t, dt) {
   W.update(t, dt);
   if (cast) cast.update(t, dt, skyKind, world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())));
+  if (extras) extras.update(t, dt);
   decor.update(t, dt, skyKind === "night" || skyKind === "dusk");
   if (!pet) return;
   const P = pet, sleep = mood === "sleep";
@@ -701,7 +712,7 @@ document.querySelectorAll("[data-species]").forEach((b) => b.addEventListener("c
 }));
 
 /* ---------------------------------------------------------------- 她的小猫 + 小马、钓鱼（cast3d.js，加载失败也不影响别的） */
-let cast = null;
+let cast = null, extras = null;
 const dinoApi = {
   root: () => pet.root, parts: () => pet, scale: () => PET_SCALE, home: () => home.clone(),
   sleeping: () => mood === "sleep",
@@ -712,12 +723,47 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=7").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=8").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
   return cast;
 }).catch((e) => { console.warn("cast3d", e); return null; });
+
+/* ---------------------------------------------------------------- 布置模式：点一件装饰选中，拖到草地上任意位置，↻ 转 45° */
+let edit = null;
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const selRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.68, 40), new THREE.MeshBasicMaterial({ color: 0xff7aa2, transparent: true, opacity: 0.85, depthWrite: false }));
+selRing.rotation.x = -Math.PI / 2;
+selRing.visible = false;
+selRing.raycast = () => {};
+world.add(selRing);
+function editSelect(g) {
+  edit.sel = g;
+  selRing.visible = !!g;
+  if (g) selRing.position.set(g.position.x, 0.03, g.position.z);
+  dispatchEvent(new CustomEvent("nest:edit-select", { detail: { item: g ? g.userData.item : null } }));
+}
+function editDown(e) {
+  const hit = pick(e);
+  const g = hit && hit.object.userData.what === "decor" ? decor.group(hit.object.userData.item) : null;
+  if (g) { editSelect(g); edit.drag = true; g.userData.editing = true; controls.enabled = false; }
+  else editSelect(null);
+}
+function editMove(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const p = ray.ray.intersectPlane(groundPlane, new THREE.Vector3());
+  if (!p) return;
+  world.worldToLocal(p);
+  // 只能放在草地平地上（不能放进河里、崖上、海里）
+  if (Math.abs(W.heightAt(p.x, p.z)) > 0.02 || Math.hypot(p.x, p.z) > 4.2) return;
+  edit.sel.position.set(p.x, 0, p.z);
+  selRing.position.set(p.x, 0.03, p.z);
+  edit.changed[edit.sel.userData.item] = true;
+}
+function editUp() { if (edit) { edit.drag = false; controls.enabled = true; } }
 
 /* ---------------------------------------------------------------- 给 social.js 用的接口 */
 window.NEST3D = {
@@ -736,6 +782,37 @@ window.NEST3D = {
   pullFish: () => cast && cast.pull(),
   fishing: () => !!(cast && cast.fishing()),
   setBook: (b) => cast && cast.setBook(b),
+  // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
+  extrasReady: castReady.then(async (c) => {
+    try {
+      const { createExtras } = await import("./extras3d.js?v=8");
+      extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf });
+    } catch (e) { console.warn("extras", e); }
+    return extras;
+  }),
+  gachaSpin: (r) => (extras ? extras.gachaSpin(r) : (dispatchEvent(new CustomEvent("nest:gacha-reveal", { detail: r })), Promise.resolve())),
+  setFarm: (st) => extras && extras.setFarm(st),
+  farmWater: (i) => (extras ? extras.farmWater(i) : Promise.resolve()),
+  farmHarvest: (i, emoji) => (extras ? extras.farmHarvest(i, emoji) : Promise.resolve()),
+  setXmas: (on) => extras && extras.setXmas(on),
+  setOutfits: (m) => extras && extras.setOutfits(m),
+  setWorld: (st) => extras && extras.setWorld(st),
+  setDecorPos: (m) => decor.setPositions(m),
+  editStart() { edit = { sel: null, drag: false, changed: {} }; controls.autoRotate = false; },
+  editRotate() { if (edit && edit.sel) { edit.sel.rotation.y += Math.PI / 4; edit.changed[edit.sel.userData.item] = true; } },
+  editStop() {
+    if (!edit) return {};
+    const out = {};
+    for (const id of Object.keys(edit.changed)) {
+      const g = decor.group(id);
+      if (g) { out[id] = encodePos(g.position.x, g.position.z, g.rotation.y); g.userData.editing = false; }
+    }
+    for (const g of decor.groups()) g.userData.editing = false;
+    edit = null; selRing.visible = false; controls.enabled = true;
+    resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000);
+    return out;
+  },
+  editing: () => !!edit,
 };
 
 /* ---------------------------------------------------------------- boot */

@@ -298,3 +298,35 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 @keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes fadein { from { opacity: 0; } }
 @keyframes wob { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg) translateY(-4px); } }
+
+/* ---- v5：标签面板、扭蛋、菜地、衣橱、每日一问、布置模式 */
+.tabs { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs button { flex: 0 0 auto; font: inherit; font-weight: 700; font-size: 13.5px; border: 0; border-radius: 12px; padding: 7px 11px; cursor: pointer; background: #fff; box-shadow: 0 2px 0 #f1d5c4; }
+.tabs button.on { background: #ffe0ea; box-shadow: 0 2px 0 #f2b8c9; }
+.panel { margin-top: 10px; }
+.panel h3 { margin: 4px 0 6px; font-size: 15px; }
+.panel .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.panel .bigbtn { font: inherit; font-weight: 800; font-size: 16px; border: 0; border-radius: 14px; padding: 11px 20px; cursor: pointer; background: linear-gradient(135deg, #ffd1dc, #ffe9a8); box-shadow: 0 3px 0 #f0b9a5; }
+.panel .bigbtn:disabled { opacity: .5; cursor: default; }
+.panel .sub { font-size: 12.5px; color: var(--muted); }
+.farm-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+.farm-cell { border-radius: 14px; background: #f6ecdf; padding: 8px 6px; text-align: center; min-height: 92px; display: flex; flex-direction: column; align-items: center; gap: 3px; box-shadow: inset 0 -3px 0 #e6d3bd; }
+.farm-cell .emo { font-size: 26px; line-height: 1.1; }
+.farm-cell small { font-size: 11px; color: var(--muted); }
+.farm-cell button { font: inherit; font-size: 12px; font-weight: 700; border: 0; border-radius: 10px; padding: 5px 10px; background: #fff; cursor: pointer; box-shadow: 0 2px 0 #e6cdb4; }
+.farm-cell.ready { background: #fff4d6; } .farm-cell.wilted { background: #efe7e0; filter: saturate(.7); }
+.seed-pick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.seed-pick button { font: inherit; border: 0; border-radius: 12px; padding: 6px 9px; background: #fff; cursor: pointer; box-shadow: 0 2px 0 #f1d5c4; display: flex; flex-direction: column; align-items: center; font-size: 22px; }
+.seed-pick button small { font-size: 11px; color: var(--muted); }
+.qa-q { font-size: 16px; font-weight: 700; margin: 6px 0; line-height: 1.5; }
+.qa-a { background: #fff8f2; border-radius: 12px; padding: 8px 10px; margin: 6px 0; font-size: 14px; line-height: 1.6; }
+.qa-a b { color: #c66a8a; margin-right: 6px; }
+.qa-form textarea { width: 100%; box-sizing: border-box; border: 2px solid #f3dfd2; border-radius: 12px; padding: 8px 10px; font: inherit; resize: vertical; }
+.qa-hist { margin-top: 10px; border-top: 1px dashed #ead8ca; padding-top: 6px; }
+.qa-hist details { margin: 6px 0; } .qa-hist summary { cursor: pointer; font-size: 13.5px; }
+.edit-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 75; display: flex; gap: 8px; align-items: center; background: rgba(255,255,255,.96);
+  border-radius: 18px; padding: 8px 10px; box-shadow: 0 6px 24px rgba(0,0,0,.18); max-width: calc(100vw - 24px); flex-wrap: wrap; justify-content: center; }
+.edit-bar span { font-size: 13px; color: var(--muted); }
+.edit-bar button { font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 8px 12px; background: #f6efe9; cursor: pointer; }
+.edit-bar button.primary { background: #ffd1dc; }

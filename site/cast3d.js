@@ -1,8 +1,8 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=7";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=7";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=8";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=8";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
@@ -250,6 +250,19 @@ export function createCast(ctx) {
       await dinoGoToHer(1.0);
       await kAnim("blush", 1.2);
       burst(hearts, world.worldToLocal(headOf(kitten)), 5);
+    },
+    async tuck() { // 她给他盖被子：小猫跑到床边拍一拍
+      await herGoToDino(0.8);
+      await kAnim("pat", 1.3);
+      dino.react(dino.sleeping() ? "stir" : "blush");
+      burst(hearts, world.worldToLocal(headOf(dino.parts())), 5, 0.7);
+      await wait(0.5);
+    },
+    async me_tuck() { // 他给她盖被子：恐龙走过去摸摸头
+      await dinoGoToHer(0.9);
+      dino.react("love");
+      await kAnim("blush", 1.3);
+      burst(hearts, world.worldToLocal(headOf(kitten)), 5, 0.7);
     },
     async sorry() { // 他认错：恐龙走过去鞠躬
       await dinoGoToHer(1.1);

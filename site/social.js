@@ -29,6 +29,7 @@
     welcome: "开张礼包 🎉", bed: "按时睡觉 🛏", sleep7: "睡够 7 小时 😴", green: "恢复满格 💚", regular: "作息规律 📅",
     active: "今天动起来了 🏸", streak3: "连续 3 晚按时睡 🔥", nudge: "一催就睡 🔔", feed: "今天第一次喂食 🍙",
     notes: "纸条往来 💌", calm: "和好奖励 🌈", fish: "钓鱼收获 🎣", mood: "报心情 💭",
+    qa: "每日一问 📝", tuck_me: "盖被子 🛏", tuck_her: "盖被子 🛏", harvest: "菜地收获 🧺", gacha: "扭蛋 🎰",
   };
   // 她报的心情、两只角色之间的小动作、钓鱼的奖池（名字和图标；概率和星星以后端为准）
   const MOODS = { happy: ["开心", "😊"], tired: ["累了", "😮‍💨"], miss: ["想你", "🥺"], angry: ["有点气", "😤"], sleepy: ["困了", "😪"] };
@@ -41,8 +42,21 @@
   };
   const RARITY = { common: ["普通", "#8d99a6"], rare: ["稀有", "#2f8fd8"], epic: ["史诗", "#9b59d0"], legend: ["传说", "#e0a000"] };
   const SWEET = ["今天也很想你 💕", "要好好吃饭哦", "等见面那天，一起去海边钓鱼吧 🎣", "你是我钓到过最好的宝贝", "早点睡，梦里见 🌙"];
+  // 扭蛋款装饰 / 作物 / 小猫的衣服（名字和图标；概率、价格以后端为准）
+  const GACHA_ITEMS = {
+    paper_lantern: ["纸灯笼", "🏮", "common"], pinwheel: ["小风车花", "🌀", "common"], mushroom_lamp: ["蘑菇灯", "🍄", "common"], bird_house: ["小鸟屋", "🐦", "common"],
+    cat_tower: ["猫爬架", "🐈", "rare"], hammock: ["吊床", "🛏", "rare"], star_lamp: ["星星灯", "🌟", "rare"],
+    carousel: ["小旋转木马", "🎠", "epic"], hot_air_heart: ["爱心热气球", "💗", "epic"],
+    xmas_tree: ["圣诞树", "🎄", "rare"], reindeer: ["小驯鹿", "🦌", "epic"], gingerbread: ["姜饼屋", "🏠", "rare"], snow_family: ["雪人一家", "⛄", "rare"], candy_lane: ["拐杖糖小路", "🍭", "common"],
+  };
+  const CROP_INFO = { tomato: ["小番茄", "🍅"], strawberry: ["草莓", "🍓"], carrot: ["胡萝卜", "🥕"], sunflower: ["向日葵", "🌻"], tulip: ["郁金香", "🌷"], pumpkin: ["南瓜", "🎃"], poinsettia: ["圣诞红", "🌺"] };
+  const OUTFIT_INFO = {
+    santa_hat: ["圣诞帽", "🎅"], beanie: ["毛线帽", "🧶"], flower_crown: ["花环", "🌼"], beret: ["贝雷帽", "🎨"], witch_hat: ["小巫师帽", "🧙"], crown: ["小王冠", "👑"], bunny_ears: ["兔耳发箍", "🐰"],
+    round_glasses: ["圆眼镜", "👓"], heart_sunglasses: ["爱心墨镜", "😎"], red_scarf: ["红围巾", "🧣"], knit_scarf: ["条纹围巾", "🧣"], bow_tie: ["领结", "🎀"],
+  };
+  const isXmasSeason = () => { const q = new URLSearchParams(location.search); if (q.has("xmas")) return true; const d = new Date(), md = (d.getMonth() + 1) * 100 + d.getDate(); return md >= 1120 || md <= 102; };
   const LEVELS = [[0, "小不点"], [20, "小可爱"], [50, "小伙伴"], [100, "小英雄"], [200, "小岛之王"]];
-  let wallet = null, nudgedAt = 0, presence = {}, fishingNow = false;
+  let wallet = null, nudgedAt = 0, presence = {}, fishingNow = false, worldInfo = null, qaData = null, panel = null, seedPickFor = null;
   const WHO_KEY = "nest.who", MUTE_KEY = "nest.mute";
 
   let me = store.get(WHO_KEY);               // "her" | "me"
@@ -121,6 +135,7 @@
     let anger = 0, angry = false, hits = 0;
     const now = Date.now();
     let full = 0, feedsToday = 0, flowers = 0, mood = null, moodTs = 0, asleep = false;
+    const lastNight = {}, lastTuck = {};
     const today = new Date().toDateString();
     for (const e of events) {
       if (e.kind === "angry") { angry = true; anger = 100; hits = 0; }
@@ -136,12 +151,23 @@
       if (e.kind === "flower" && now - e.ts < 48 * 3600000) flowers++;
       if (e.kind === "mood") { mood = e.item; moodTs = e.ts; }
       if (e.kind === "sleep") asleep = now - e.ts < 14 * 3600000;
+      if (e.kind === "sleep" || e.kind === "night") lastNight[e.who] = e;
+      if (e.kind === "tuck") lastTuck[e.who] = e;
       if (e.kind === "wake") asleep = false;
     }
     if (now - moodTs > 12 * 3600000) mood = null;
+    // 能不能给对方盖被子：对方 12 小时内说过晚安，我在那之后还没盖过
+    const other = me === "her" ? "me" : "her";
+    const n = lastNight[other];
+    const canTuck = !!(n && now - n.ts < 12 * 3600000 && !(lastTuck[me] && lastTuck[me].id > n.id));
+    // 晚安连击：往回数，每个北京日有人盖过被子就算一天
+    const tuckDays = new Set(events.filter((e) => e.kind === "tuck").map((e) => new Date(e.ts + 8 * 3600000).toISOString().slice(0, 10)));
+    let streak = 0;
+    for (let d = new Date(now + 8 * 3600000); tuckDays.has(d.toISOString().slice(0, 10)) || (streak === 0 && tuckDays.has(new Date(d - 86400000).toISOString().slice(0, 10))); d = new Date(d - 86400000)) if (tuckDays.has(d.toISOString().slice(0, 10))) streak++;
+    const meSaidNight = !!(lastNight[me] && now - lastNight[me].ts < 10 * 3600000);
     // 本地还没发出去的连击也算进去，气消条实时动
     if (angry && pendingHits) anger -= WEAPONS[weapon].dmg * pendingHits, hits += pendingHits;
-    return { angry, anger: Math.max(0, Math.round(anger)), hits, full: Math.min(100, Math.round(full)), feedsToday, flowers: Math.min(3, flowers), mood, asleep };
+    return { angry, anger: Math.max(0, Math.round(anger)), hits, full: Math.min(100, Math.round(full)), feedsToday, flowers: Math.min(3, flowers), mood, asleep, canTuck, streak, meSaidNight };
   }
 
   /* ------------------------------------------------------------ rendering */
@@ -161,6 +187,7 @@
     const herOnline = me === "her" || (presence.her && Date.now() - presence.her < 3 * 60000);
     window.NEST3D && window.NEST3D.setHer && window.NEST3D.setHer({ online: !!herOnline, asleep: s.asleep, mood: s.mood });
     $("#her-status").innerHTML = herStatus(s, herOnline);
+    syncWorld();
 
     // 气消条
     $("#anger").hidden = !s.angry;
@@ -180,11 +207,14 @@
       A.push(`<button data-act="note">💌 留言</button>`);
       A.push(`<button data-act="nudge">🌙 该睡觉啦</button>`);
       A.push(`<button data-act="acts">💞 互动</button>`, `<button data-act="moods">💭 心情</button>`);
-      A.push(s.asleep ? `<button data-act="wake">☀️ 我醒啦</button>` : `<button data-act="sleep">😴 我睡啦</button>`);
+      A.push(s.asleep ? `<button data-act="wake">☀️ 我醒啦</button>` : `<button data-act="sleep">🌙 晚安<small>我去睡啦</small></button>`);
+      if (s.canTuck) A.push(`<button data-act="tuck">🛏 给他盖被子</button>`);
       A.push(fishBtn());
     } else {
       A.push(`<button data-act="sorry">🙇 认错</button>`, `<button data-act="flower">🌹 送花</button>`, `<button data-act="note">💌 写纸条</button>`);
       A.push(`<button data-act="acts">💞 互动</button>`, fishBtn());
+      A.push(s.meSaidNight ? `<button data-act="night" disabled>🌙 已说晚安</button>` : `<button data-act="night">🌙 晚安</button>`);
+      if (s.canTuck) A.push(`<button data-act="tuck">🛏 给${HER()}盖被子</button>`);
       if (pushState !== "unsupported") A.push(pushState === "on" ? `<button data-act="push-test">🔔 通知已开<small>点一下测试</small></button>` : `<button data-act="push">🔔 开启通知</button>`);
     }
     A.push(`<button data-act="mute" class="mini" title="声音">${store.get(MUTE_KEY) === "1" ? "🔇" : "🔈"}</button>`);
@@ -205,15 +235,16 @@
     return `<button data-act="fish">🎣 钓鱼<small>${sub}</small></button>`;
   }
   function herStatus(s, online) {
-    if (me === "her") return s.mood ? `你现在的心情：${MOODS[s.mood][1]} ${MOODS[s.mood][0]}` : "";
+    const st = s.streak > 1 ? ` · 🌙 晚安连击 ${s.streak} 天` : "";
+    if (me === "her") return (s.mood ? `你现在的心情：${MOODS[s.mood][1]} ${MOODS[s.mood][0]}` : "") + st;
     const bits = [];
     bits.push(s.asleep ? `😴 ${HER()}睡着了` : online ? `🟢 ${HER()}在岛上` : presence.her ? `${HER()} ${ago(new Date(presence.her).toISOString())}来过` : "");
     if (s.mood && !s.asleep) bits.push(`心情：${MOODS[s.mood][1]} ${MOODS[s.mood][0]}`);
-    return bits.filter(Boolean).join(" · ");
+    return bits.filter(Boolean).join(" · ") + st;
   }
 
   async function renderTimeline() {
-    const recent = events.filter((e) => e.kind !== "place").slice(-15).reverse();
+    const recent = events.filter((e) => !["place", "move", "seed", "spend"].includes(e.kind) && !(e.kind === "farm" && (e.item || "").startsWith("useseed"))).slice(-15).reverse();
     const lines = await Promise.all(recent.map(async (e) => {
       const w = whoName(e.who);
       let t = "";
@@ -231,10 +262,16 @@
       else if (e.kind === "sleep") t = `${w}去睡觉啦 😴`;
       else if (e.kind === "wake") t = `${w}醒啦 ☀️`;
       else if (e.kind === "act") t = `${w}${actText(e)}`;
+      else if (e.kind === "answer") t = `${w}回答了 ${e.item.slice(5)} 的每日一问 📝`;
+      else if (e.kind === "night") t = `${w}说晚安啦 🌙`;
+      else if (e.kind === "tuck") t = `${w}给${e.who === me ? (me === "her" ? "他" : HER()) : "你"}盖好了被子 🛏`;
+      else if (e.kind === "gacha") { const g = GACHA_ITEMS[e.item]; t = `${w}扭到了${g ? g[0] + " " + g[1] : e.item === "seeds" ? "种子包 🌱" : "星星袋 ⭐"}`; }
+      else if (e.kind === "farm") { const [a, c] = (e.item || "").split(":"); const ci = CROP_INFO[c] || ["", "🌱"]; t = a === "plant" ? `${w}种下了${ci[0]} ${ci[1]}` : a === "water" ? `${w}给菜地浇了水 💧` : a === "harvest" ? `${w}收获了${ci[0]} ${ci[1]}` : ""; if (!t) return ""; }
+      else if (e.kind === "wear") { const o = OUTFIT_INFO[e.item] || ["衣服", "👗"]; t = e.n ? `${w}给小猫戴上了${o[0]} ${o[1]}` : `${w}给小猫摘掉了${o[0]}`; }
       else if (e.kind === "fish") { const c = CATCH[e.item] || ["神秘的东西", "❓", "common"]; t = `${w}钓到了${c[0]} ${c[1]}${c[2] !== "common" ? `（${RARITY[c[2]][0]}）` : ""}`; }
       return `<li class="${e.who === me ? "mine" : ""}"><span>${esc(t)}</span><time>${ago(new Date(e.ts).toISOString())}</time></li>`;
     }));
-    $("#timeline").innerHTML = lines.join("") || `<li class="muted">还没有互动，${me === "her" ? "先喂它点好吃的吧" : `等${HER()}来玩`} ✨</li>`;
+    $("#timeline").innerHTML = lines.filter(Boolean).join("") || `<li class="muted">还没有互动，${me === "her" ? "先喂它点好吃的吧" : `等${HER()}来玩`} ✨</li>`;
   }
   function actText(e) {
     const other = e.who === "her" ? (me === "me" ? "你" : "他") : (me === "her" ? "你" : HER());
@@ -257,6 +294,12 @@
     else if (e.kind === "mood") { say(`${HER()}现在${(MOODS[e.item] || ["有点心情"])[0]} ${(MOODS[e.item] || ["", "💭"])[1]}`); }
     else if (e.kind === "sleep") { say(`${HER()}去睡觉啦 😴 晚安`); }
     else if (e.kind === "wake") { say(`${HER()}醒啦 ☀️`); }
+    else if (e.kind === "night") { say(`他说晚安啦 🌙 给他盖个被子吧`); }
+    else if (e.kind === "tuck") { play("tuck"); say(`${whoName(e.who)}给你盖好了被子 🛏 晚安～`); }
+    else if (e.kind === "answer") { say(`${whoName(e.who)}回答了今天的每日一问 📝`); if (panel === "qa") loadQA(); }
+    else if (e.kind === "gacha") { const g = GACHA_ITEMS[e.item]; say(`${whoName(e.who)}扭到了${g ? g[0] + " " + g[1] : "好东西"}`); }
+    else if (e.kind === "farm") { const [a, c] = (e.item || "").split(":"); if (a === "water") say(`${whoName(e.who)}给菜地浇了水 💧`); if (a === "harvest") say(`${whoName(e.who)}收获了${(CROP_INFO[c] || ["菜"])[0]} 🧺`); }
+    else if (e.kind === "wear") { applyWallet(); }
     else if (e.kind === "fish") {
       const c = CATCH[e.item] || ["神秘的东西", "❓", "common"];
       // 对方钓鱼时，在你这边也演一遍（结果已经定了）
@@ -264,7 +307,7 @@
       else say(`${whoName(e.who)}钓到了${c[0]} ${c[1]}`);
     }
     else if (e.kind === "note") { say(`${whoName(e.who)}的纸条：「${await open(e.box || "")}」`); }
-    else if (e.kind === "star") { if (!(e.item || "").startsWith("fish:")) { R && R.react("love"); say(`+${e.n} ⭐ ${REASONS[(e.item || "").split(":")[0]] || ""}`); } }
+    else if (e.kind === "star") { if (!/^(fish|gacha|harvest):/.test(e.item || "")) { R && R.react("love"); say(`+${e.n} ⭐ ${REASONS[(e.item || "").split(":")[0]] || ""}`); } }
     else if (e.kind === "buy") { R && R.react("love"); say(`${whoName(e.who)}给小岛买了${(ITEMS[e.item] || ["新东西"])[0]} ${(ITEMS[e.item] || ["", "🎁"])[1]}`); }
     else if (e.kind === "nudge") { say(`🌙 ${HER()}催你睡觉啦！现在睡着就能拿 3 颗星星`); }
   }
@@ -278,7 +321,7 @@
       if (!fresh.length) { render(); if (first) renderTimeline(); return; }
       events = events.concat(fresh);
       lastId = fresh[fresh.length - 1].id;
-      if (fresh.some((e) => ["star", "buy", "place", "fish"].includes(e.kind))) await loadWallet();
+      if (fresh.some((e) => ["star", "buy", "place", "fish", "gacha", "farm", "wear", "move", "seed", "spend"].includes(e.kind))) await loadWallet();
       if (!first) for (const e of fresh) await onRemote(e);
       render(); renderTimeline();
     } catch (e) {
@@ -306,9 +349,18 @@
   }
 
   /* ------------------------------------------------------------ actions */
+  const PANELS = { earn: "#earn", shop: "#shop-wrap", book: "#book", gacha: "#gacha", farm: "#farm", wardrobe: "#wardrobe", qa: "#qa" };
+  function openPanel(k) {
+    panel = panel === k ? null : k;
+    for (const [id, sel] of Object.entries(PANELS)) $(sel).hidden = id !== panel;
+    document.querySelectorAll("[data-panel]").forEach((b) => b.classList.toggle("on", b.dataset.panel === panel));
+    if (panel === "qa") loadQA();
+    renderPanels();
+  }
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("button");
     if (!b) return;
+    if (b.dataset.panel) { openPanel(b.dataset.panel); return; }
     if (b.dataset.who) { me = b.dataset.who; store.set(WHO_KEY, me); if (me === "me") await checkPush(); render(); renderTimeline(); return; }
     if (b.dataset.weapon) { weapon = b.dataset.weapon; render(); sfx("pop"); return; }
     if (b.dataset.doact) {
@@ -340,9 +392,7 @@
     if (!act || posting) return;
     if (act === "mute") { store.set(MUTE_KEY, store.get(MUTE_KEY) === "1" ? "0" : "1"); render(); return; }
     if (act === "push") { enablePush(); return; }
-    if (act === "shop") { const s = $("#shop"); s.hidden = !s.hidden; $("#earn").hidden = true; $("#book").hidden = true; renderWallet(); return; }
-    if (act === "earn") { const s = $("#earn"); s.hidden = !s.hidden; $("#shop").hidden = true; $("#book").hidden = true; return; }
-    if (act === "book") { const s = $("#book"); s.hidden = !s.hidden; $("#shop").hidden = true; $("#earn").hidden = true; renderBook(); return; }
+
     if (act === "push-test") { pushTest(); return; }
     if (act === "feed") {
       const t = $("#tray");
@@ -367,7 +417,9 @@
       if (act === "calm") { await flushHits(); await post({ kind: "calm" }); window.NEST3D && window.NEST3D.react("love"); say("好啦，原谅你了 🌈"); burst(); }
       if (act === "sorry") { const P = window.NEST3D && window.NEST3D.play; P ? P("sorry", "me") : window.NEST3D && window.NEST3D.react("bow"); await post({ kind: "sorry" }); say("对不起，我错了 🙇"); }
       if (act === "flower") { const P = window.NEST3D && window.NEST3D.play; P && P("flower", "me"); await post({ kind: "flower" }); burst(); say("送你一朵小花 🌹"); }
-      if (act === "sleep") { await post({ kind: "sleep" }); say("晚安 🌙 小猫趴在小马背上睡啦"); }
+      if (act === "sleep") { await post({ kind: "sleep" }); say("晚安 🌙 小猫趴在小马背上睡啦，等他来给你盖被子"); }
+      if (act === "night") { await post({ kind: "night" }); say(`晚安 🌙 等${HER()}来给你盖被子`); }
+      if (act === "tuck") { window.NEST3D && window.NEST3D.play && window.NEST3D.play("tuck", me); await post({ kind: "tuck" }); say("被子盖好啦 🛏 +1 ⭐"); sfx("chime"); loadWallet(); }
       if (act === "wake") { await post({ kind: "wake" }); say("早上好 ☀️"); burst(); }
       if (act === "nudge") {
         if (Date.now() - nudgedAt < 20 * 60000) { say("刚催过啦，给他一点时间 🌙"); }
@@ -580,6 +632,9 @@
     R.setSnow && R.setSnow(shown.includes("snow"));
     R.setLevel && R.setLevel(level(wallet.earned).lv);
     R.setBook && R.setBook(wallet.fishbook || {});
+    R.setDecorPos && R.setDecorPos(wallet.pos || {});
+    R.setOutfits && R.setOutfits(wallet.worn || {});
+    R.setFarm && R.setFarm(wallet.farm);
   }
   function renderWallet() {
     if (!wallet) return;
@@ -591,15 +646,25 @@
       <li>🏸 今天动起来了 <b>+1</b> · 🔥 连续 3 晚按时睡 <b>+5</b></li>
       <li>🔔 ${HER()}点"该睡觉啦"，他 30 分钟内睡着 <b>+3</b></li>
       <li>🍙 每天第一次喂食 <b>+1</b> · 💌 同一天互相留言 <b>+1</b> · 🌈 吵架后和好 <b>+1</b> · 💭 ${HER()}每天报一次心情 <b>+1</b></li>
-      <li>🎣 钓鱼：每人每天免费 3 竿，钓到锦鲤、鲸鱼、海龟、宝箱和传说级的宝贝都有星星，第一次钓到新东西再 <b>+1</b>（连续 14 竿没出史诗，第 15 竿保底）</li></ul>
+      <li>🎣 钓鱼：每人每天免费 3 竿，钓到锦鲤、鲸鱼、海龟、宝箱和传说级的宝贝都有星星，第一次钓到新东西再 <b>+1</b>（连续 14 竿没出史诗，第 15 竿保底）</li>
+      <li>📝 每日一问两个人都答了 <b>+2</b> · 🛏 给对方盖被子 <b>+1</b> · 🧺 菜地收获 <b>+4～9</b> · 🎰 扭蛋偶尔出星星袋</li></ul>
       <p class="muted">手环的星星每 10 分钟结算一次。最近入账：${(wallet.recent || []).slice(0, 5).map((x) => `${REASONS[x.item.split(":")[0]] || x.item} +${x.n}`).join(" · ") || "还没有"}</p>`;
-    if (!$("#book").hidden) renderBook();
-    if ($("#shop").hidden) return;
+    renderPanels();
+  }
+  function renderPanels() {
+    if (!wallet) return;
+    if (panel === "book") renderBook();
+    if (panel === "gacha") renderGacha();
+    if (panel === "farm") renderFarm();
+    if (panel === "wardrobe") renderWardrobe();
+    if (panel !== "shop") return;
     const owned = new Set(wallet.owned || []), shown = wallet.shown || {}, prices = wallet.prices || {};
     const ids = Object.keys(ITEMS).filter((k) => prices[k] != null && (!window.NEST3D || !window.NEST3D.hasDecor || k === "snow" || window.NEST3D.hasDecor(k)));
     ids.sort((a, b) => prices[a] - prices[b]);
-    $("#shop").innerHTML = ids.map((k) => {
-      const [name, emoji] = ITEMS[k], price = prices[k];
+    // 扭蛋得到的装饰也在这里摆 / 收
+    for (const k of Object.keys(GACHA_ITEMS)) if (owned.has(k)) ids.unshift(k);
+    $("#shop").innerHTML = `<div class="row" style="grid-column: 1 / -1"><button class="bigbtn" data-act="arrange" style="font-size:14px;padding:8px 14px">🛋 布置小岛</button><span class="sub">把装饰拖到喜欢的位置</span></div>` + ids.map((k) => {
+      const [name, emoji] = ITEMS[k] || GACHA_ITEMS[k], price = prices[k];
       if (owned.has(k)) return `<button data-place="${k}" class="item owned ${shown[k] ? "on" : ""}"><span class="emo">${emoji}</span><b>${name}</b><small>${shown[k] ? "摆着 · 点一下收起" : "收着 · 点一下摆出来"}</small></button>`;
       const can = wallet.balance >= price;
       return `<button data-buy="${k}" class="item ${can ? "" : "poor"}"><span class="emo">${emoji}</span><b>${name}</b><small>⭐ ${price}</small></button>`;
@@ -611,9 +676,10 @@
     posting = true;
     try {
       if (b.dataset.buy) {
-        const k = b.dataset.buy, [name, emoji] = ITEMS[k];
-        if (wallet && wallet.balance < wallet.prices[k]) { say(`星星不够哦，还差 ${wallet.prices[k] - wallet.balance} 颗 ⭐`); }
-        else if (confirm(`用 ${wallet.prices[k]} 颗星星买「${name}」吗？`)) {
+        const k = b.dataset.buy, [name, emoji] = ITEMS[k] || OUTFIT_INFO[k];
+        const price = (wallet.prices || {})[k] ?? (wallet.outfits || {})[k];
+        if (wallet && wallet.balance < price) { say(`星星不够哦，还差 ${price - wallet.balance} 颗 ⭐`); }
+        else if (confirm(`用 ${price} 颗星星买「${name}」吗？`)) {
           await post({ kind: "buy", item: k });
           await loadWallet();
           say(`买到了${name} ${emoji}！`); burst();
@@ -627,6 +693,213 @@
     posting = false;
   });
 
+  /* ------------------------------------------------------------ 扭蛋 */
+  function renderGacha() {
+    const R = wallet.gachaRules || { free: 1, price: 3, max: 6 }, used = (wallet.spins || {})[me] || 0;
+    const owned = new Set(wallet.owned || []);
+    const sub = used < R.free ? "今天还有 1 次免费" : used < R.max ? `再扭一次 ⭐${R.price}` : "今天扭完啦，明天再来";
+    const list = Object.entries(GACHA_ITEMS).filter(([, v]) => R.xmas || !["xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"].includes(Object.keys(GACHA_ITEMS).find((k) => GACHA_ITEMS[k] === v)));
+    $("#gacha").innerHTML = `<div class="row"><button class="bigbtn" data-act="spin" ${used >= R.max ? "disabled" : ""}>🎰 扭一次</button><span class="sub">${sub}</span></div>
+      ${R.xmas ? `<p class="sub">🎄 圣诞季限定款上架中：圣诞树、小驯鹿、姜饼屋、雪人一家、拐杖糖小路</p>` : ""}
+      <p class="sub">会扭到小岛限定装饰、种子包或星星袋；重复的装饰自动换成 2 颗星。</p>
+      <div class="shop">${list.map(([k, [n, e, r]]) => {
+        const id = Object.keys(GACHA_ITEMS).find((x) => GACHA_ITEMS[x][0] === n);
+        return `<div class="item book ${owned.has(id) ? "" : "none"} r-${r === "epic" ? "epic" : r === "rare" ? "rare" : "common"}"><span class="emo">${owned.has(id) ? e : "❔"}</span><b>${owned.has(id) ? n : "？？？"}</b><small style="color:${RARITY[r][1]}">${RARITY[r][0]}</small></div>`;
+      }).join("")}</div>`;
+  }
+  let spinningNow = false;
+  async function spin() {
+    if (spinningNow) return;
+    const R = wallet.gachaRules || { free: 1, price: 3, max: 6 }, used = (wallet.spins || {})[me] || 0;
+    let pay = false;
+    if (used >= R.max) { say("今天扭完啦，明天再来 🎰"); return; }
+    if (used >= R.free) {
+      if (wallet.balance < R.price) { say(`再扭一次要 ${R.price} 颗星星，星星不够哦`); return; }
+      if (!confirm(`今天的免费次数用完了，用 ${R.price} 颗星星再扭一次？`)) return;
+      pay = true;
+    }
+    spinningNow = true;
+    try {
+      const r = await fetch(API + "/gacha", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: me, pay }) });
+      const j = await r.json();
+      if (!r.ok) { say("扭蛋机卡住了…（" + (j.error || r.status) + "）"); spinningNow = false; return; }
+      sfx("pop");
+      if (window.NEST3D && window.NEST3D.gachaSpin) await window.NEST3D.gachaSpin(j);
+      else gachaCard(j);
+    } catch { say("扭蛋机卡住了…网络好像不太好 😢"); }
+    spinningNow = false;
+    await loadWallet(); await poll();
+  }
+  function gachaCard(d) {
+    const g = GACHA_ITEMS[d.prize];
+    const rar = RARITY[d.rarity] || RARITY.common;
+    let title, emo, extra = "";
+    if (g) { title = g[0]; emo = g[1]; extra = d.dup ? `<p class="muted">已经有啦，换成 <b>+2 ⭐</b></p>` : `<p class="first">新装饰！在商店里可以摆出来 🛋</p>`; }
+    else if (d.prize === "seeds") { title = "种子包"; emo = "🌱"; extra = `<p>${(d.seeds || []).map((x) => (CROP_INFO[x] || ["", "🌱"])[1] + " " + (CROP_INFO[x] || ["种子"])[0]).join(" · ")}</p><p class="sub">去菜地种下吧</p>`; }
+    else { title = "星星袋"; emo = "⭐"; extra = `<p class="gain">+${d.stars} ⭐</p>`; }
+    const card = document.createElement("div");
+    card.className = "catch-card r-" + (d.rarity === "common" ? "common" : d.rarity);
+    card.innerHTML = `<div class="cc-in"><small style="color:${rar[1]}">${"★".repeat({ common: 1, rare: 2, epic: 3 }[d.rarity] || 1)} ${rar[0]}</small><div class="cc-emo">${emo}</div><b>${title}</b>${extra}<button>收下</button></div>`;
+    document.body.appendChild(card);
+    sfx(d.rarity === "common" ? "pop" : "chime");
+    if (d.rarity === "epic") { const p = headPos(); hearts(p.x, p.y, 30); }
+    card.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON" || e.target === card) card.remove(); });
+    setTimeout(() => card.remove(), 9000);
+  }
+  addEventListener("nest:gacha-reveal", (ev) => gachaCard(ev.detail));
+
+  /* ------------------------------------------------------------ 菜地 */
+  function renderFarm() {
+    const F = wallet.farm;
+    if (!F) { $("#farm").innerHTML = `<p class="sub">菜地还没开张</p>`; return; }
+    const cells = F.plots.map((p, i) => {
+      if (!p) return `<div class="farm-cell"><span class="emo">🟫</span><small>空地</small><button data-farm="pick" data-plot="${i}">种点什么</button></div>`;
+      const [n, e] = CROP_INFO[p.crop] || ["作物", "🌱"];
+      const emo = p.ready ? e : p.watered === 0 ? "🌰" : "🌱";
+      const btn = p.ready ? `<button data-farm="harvest" data-plot="${i}">🧺 收获</button>` : p.wateredToday ? `<small>今天浇过了</small>` : `<button data-farm="water" data-plot="${i}">💧 浇水</button>`;
+      return `<div class="farm-cell ${p.ready ? "ready" : ""} ${p.wilted ? "wilted" : ""}"><span class="emo">${emo}</span><small>${n} · 💧${p.watered}/${p.need}${p.wilted ? " · 蔫了，快浇水" : ""}</small>${btn}</div>`;
+    }).join("");
+    let pick = "";
+    if (seedPickFor != null) {
+      pick = `<p class="sub">在第 ${seedPickFor + 1} 块地种：</p><div class="seed-pick">` + Object.entries(F.crops).filter(([k, c]) => !c.season || F.xmas).map(([k, c]) => {
+        const have = (F.seeds || {})[k] || 0, [n, e] = CROP_INFO[k] || [k, "🌱"];
+        return `<button data-farm="plant" data-crop="${k}" data-plot="${seedPickFor}">${e}<small>${n}</small><small>${have ? `种子 ×${have}` : `⭐${c.seed}`} · ${c.days} 天</small></button>`;
+      }).join("") + `</div>`;
+    }
+    $("#farm").innerHTML = `<p class="sub">菜地在高台上（瀑布旁边）。每块地每天浇一次水，浇够天数就能收获，收获有星星。两天不浇会蔫，但不会死～</p><div class="farm-grid">${cells}</div>${pick}`;
+  }
+  async function farmAct(act, plot, crop) {
+    try {
+      const r = await fetch(API + "/farm", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: me, act, plot, crop }) });
+      const j = await r.json();
+      if (!r.ok) { say({ "not enough stars": "星星不够买种子哦", "already watered today": "今天已经浇过啦", "not ready": "还没长好呢" }[j.error] || "没成功：" + j.error); return; }
+      const R = window.NEST3D;
+      if (act === "plant") { seedPickFor = null; say(`种下了${(CROP_INFO[crop] || ["种子"])[0]} 🌱`); sfx("pop"); }
+      if (act === "water") { R && R.farmWater && R.farmWater(plot); say(`浇好水啦 💧（${j.watered}/${j.need}）`); sfx("chime"); }
+      if (act === "harvest") { R && R.farmHarvest && R.farmHarvest(plot, (CROP_INFO[j.crop] || ["", "🌱"])[1]); say(`收获了${(CROP_INFO[j.crop] || ["菜"])[0]}！+${j.stars} ⭐`); burst(); }
+      await loadWallet(); await poll();
+    } catch { say("没成功，网络好像不太好 😢"); }
+  }
+
+  /* ------------------------------------------------------------ 衣橱（小猫） */
+  function renderWardrobe() {
+    const owned = new Set(wallet.owned || []), worn = wallet.worn || {}, prices = wallet.outfits || {};
+    $("#wardrobe").innerHTML = `<p class="sub">给${me === "her" ? "你的" : HER() + "的"}小猫换衣服：帽子、眼镜、围巾各能戴一件。${isXmasSeason() ? "圣诞季没戴帽子会自动戴上圣诞帽 🎅" : ""}</p><div class="shop">` +
+      Object.keys(OUTFIT_INFO).filter((k) => prices[k] != null).map((k) => {
+        const [n, e] = OUTFIT_INFO[k];
+        if (owned.has(k)) return `<button data-wear="${k}" class="item owned ${worn[k] ? "on" : ""}"><span class="emo">${e}</span><b>${n}</b><small>${worn[k] ? "戴着 · 点一下摘掉" : "点一下戴上"}</small></button>`;
+        return `<button data-buy="${k}" class="item ${wallet.balance >= prices[k] ? "" : "poor"}"><span class="emo">${e}</span><b>${n}</b><small>⭐ ${prices[k]}</small></button>`;
+      }).join("") + `</div>`;
+  }
+
+  /* ------------------------------------------------------------ 每日一问 */
+  async function loadQA() {
+    try {
+      const r = await fetch(API + "/qa", { headers: { authorization: "Bearer " + (await getToken()) } });
+      if (r.ok) qaData = await r.json();
+    } catch {}
+    renderQA();
+  }
+  async function renderQA() {
+    if (!qaData) { $("#qa").innerHTML = `<p class="sub">加载中…</p>`; return; }
+    const other = me === "her" ? "me" : "her", otherName = me === "her" ? "他" : HER();
+    const today = qaData.days.find((d) => d.day === qaData.today) || { question: "", answers: [] };
+    const mine = today.answers.find((a) => a.who === me), theirs = today.answers.find((a) => a.who === other);
+    let body = `<p class="qa-q">📝 ${esc(today.question)}</p>`;
+    if (!mine) {
+      body += `<form class="qa-form" id="qa-form"><textarea maxlength="300" rows="3" placeholder="写下你的回答（只有你们俩看得到）"></textarea><div class="row" style="margin-top:6px"><button class="bigbtn" type="submit" style="font-size:14px;padding:8px 16px">提交</button>
+        <span class="sub">${theirs ? `${otherName}已经答了，你答完就能看到 👀` : "两个人都答完才能看到对方的答案"}</span></div></form>`;
+    } else {
+      body += `<div class="qa-a"><b>我</b>${esc(await open(mine.box))}</div>`;
+      body += theirs ? `<div class="qa-a"><b>${otherName}</b>${esc(await open(theirs.box))}</div>` : `<p class="sub">等${otherName}来答～ 两个人都答完，小岛 +2 ⭐</p>`;
+    }
+    const past = qaData.days.filter((d) => d.day !== qaData.today && d.answers.length);
+    if (past.length) {
+      const rows = await Promise.all(past.map(async (d) => {
+        const m = d.answers.find((a) => a.who === me), t = d.answers.find((a) => a.who === other);
+        const ans = m ? `${m ? `<div class="qa-a"><b>我</b>${esc(await open(m.box))}</div>` : ""}${t ? `<div class="qa-a"><b>${otherName}</b>${esc(await open(t.box))}</div>` : ""}` : `<p class="sub">这天你没答，看不到${otherName}的答案</p>`;
+        return `<details><summary>${d.day.slice(5)} · ${esc(d.question)}</summary>${ans}</details>`;
+      }));
+      body += `<div class="qa-hist"><p class="sub">以前的问答</p>${rows.join("")}</div>`;
+    }
+    $("#qa").innerHTML = body;
+  }
+  root.addEventListener("submit", async (ev) => {
+    if (ev.target.id !== "qa-form") return;
+    ev.preventDefault();
+    const ta = ev.target.querySelector("textarea"), text = ta.value.trim();
+    if (!text || !qaData) return;
+    try { await post({ kind: "answer", item: qaData.today, box: await seal(text) }); say("回答好啦 📝"); sfx("chime"); await loadQA(); loadWallet(); }
+    catch { say("没提交上，网络好像不太好 😢"); }
+  });
+
+  /* ------------------------------------------------------------ 面板里的按钮：扭蛋 / 菜地 / 衣橱 / 布置 */
+  root.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    if (b.dataset.act === "spin") { spin(); return; }
+    if (b.dataset.act === "arrange") { startArrange(); return; }
+    if (b.dataset.farm) {
+      const plot = +b.dataset.plot;
+      if (b.dataset.farm === "pick") { seedPickFor = seedPickFor === plot ? null : plot; renderFarm(); return; }
+      farmAct(b.dataset.farm, plot, b.dataset.crop);
+      return;
+    }
+    if (b.dataset.wear) {
+      const k = b.dataset.wear, on = !(wallet.worn || {})[k];
+      try { await post({ kind: "wear", item: k, n: on ? 1 : 0 }); await loadWallet(); sfx("pop"); } catch { say("没换上，网络好像不太好 😢"); }
+    }
+  });
+
+  /* ------------------------------------------------------------ 布置模式 */
+  function startArrange() {
+    const R = window.NEST3D;
+    if (!R || !R.editStart) return;
+    R.editStart();
+    $("#edit-bar").hidden = false;
+    document.getElementById("scene").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  addEventListener("nest:edit-select", (ev) => {
+    const id = ev.detail.item;
+    $("#edit-hint").textContent = id ? `${(ITEMS[id] || GACHA_ITEMS[id] || ["装饰"])[0]}：拖到想放的地方` : "点一件装饰，拖到想放的地方";
+  });
+  $("#edit-bar").addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    const R = window.NEST3D;
+    if (b.dataset.edit === "rotate") { R.editRotate(); return; }
+    const changed = R.editStop();
+    $("#edit-bar").hidden = true;
+    if (b.dataset.edit === "cancel") { R.setDecorPos(wallet.pos || {}); return; }
+    const ids = Object.keys(changed);
+    if (!ids.length) return;
+    try { for (const id of ids) await api("POST", { who: me, kind: "move", item: id, n: changed[id] }); say("摆好啦 🛋"); await loadWallet(); }
+    catch { say("没保存上，网络好像不太好 😢"); }
+  });
+
+  /* ------------------------------------------------------------ 两座城市的天气 / 时间 + 圣诞季 */
+  async function loadWorld() {
+    try {
+      const r = await fetch(API + "/world", { headers: { authorization: "Bearer " + (await getToken()) } });
+      if (r.ok) worldInfo = await r.json();
+    } catch {}
+    syncWorld();
+  }
+  function syncWorld() {
+    const R = window.NEST3D;
+    if (!R || !me) return;
+    R.setXmas && R.setXmas(isXmasSeason());
+    if (!worldInfo || !R.setWorld) return;
+    const other = me === "her" ? "me" : "her";
+    const otherOnline = presence[other] && Date.now() - presence[other] < 3 * 60000;
+    R.setWorld({ mine: worldInfo[me], theirs: worldInfo[other], theirName: me === "her" ? "他" : HER(), bothOnline: !!otherOnline });
+  }
+  addEventListener("nest:tap", (ev) => {
+    if (ev.detail.what === "gacha") { if (panel !== "gacha") openPanel("gacha"); say("扭蛋机：每天免费扭一次 🎰"); }
+    if (ev.detail.what === "farm") { if (panel !== "farm") openPanel("farm"); say("菜地：记得每天浇水 💧"); }
+    if (ev.detail.what === "xmas") { say(["圣诞快乐 🎄", "Merry Christmas ✨", "今年的圣诞树亮啦 🎄"][Math.floor(Math.random() * 3)]); hearts(ev.detail.x, ev.detail.y, 8); }
+  });
+
   /* ------------------------------------------------------------ boot：解锁后才开始 */
   async function start() {
     if (started || !(await key())) return;
@@ -635,6 +908,9 @@
     render();
     loadWallet();
     addEventListener("nest:3dready", applyWallet);
+    if (window.NEST3D && window.NEST3D.extrasReady) window.NEST3D.extrasReady.then(() => { applyWallet(); syncWorld(); });
+    loadWorld();
+    setInterval(() => { if (!document.hidden) loadWorld(); }, 15 * 60000);
     await poll(true);
     setInterval(() => { if (!document.hidden) poll(); }, 12000);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });

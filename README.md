@@ -118,3 +118,22 @@ launchctl kickstart gui/$(id -u)/com.zilong.whoop-sync     # 手动跑一次，�
 - 两个浏览器窗口分别选"我是她"和"我是 Zilong"，可以互相看到对方的动作（12 秒轮询）。
 - `worker/.dev.vars` 里的 ACCESS_HASH / SYS_HASH 只是测试值（系统令牌是 64 个 `a`）；线上密钥用 `wrangler secret` 设置，本地拿不到。
 - 想单独测接口：`curl -H "authorization: Bearer <测试令牌>" localhost:8787/wallet`。测试令牌 = sha256(sha256("nest-dev") 的原始字节 + "nest-api-v1")。
+
+## 第五版：扭蛋、种菜、每日一问、晚安、换装、布置、两座城市（2026-11-09）
+- 前端模块：`extras3d.js` 负责场景编排；模型分在 `gacha3d.js`、`xmas3d.js`、`farm3d.js`、`outfit3d.js`、`weather3d.js` 里。每个模型文件都有对应的 `*-preview.html` 预览页。
+- 后端新增 4 个接口：
+  - `POST /gacha`：每人每天免费 1 次，之后每次 3 颗星，每天最多 6 次。11/20–1/2 有圣诞限定款。
+  - `POST /farm`：种（plant）、浇水（water）、收获（harvest）。共 6 块地。
+  - `GET /qa`：每日一问。题库按北京日期轮换，答案是密文。
+  - `GET /world`：两座城市的天气和时区，后端从 Open-Meteo 代取并缓存 20 分钟。坐标存在密钥 `CITIES` 里（`wrangler secret put CITIES`）。
+- 后端新增事件类型：
+  - `answer`：回答每日一问
+  - `night`：说晚安
+  - `tuck`：给对方盖被子。对方 12 小时内说过晚安才能盖，盖了 +1 星
+  - `wear`：小猫穿衣服或脱衣服
+  - `move`：装饰的位置，n 的编码见 `decor3d.js` 的 `encodePos`
+- 场景：
+  - 天色跟着正在看的人自己的时间走。
+  - 主岛显示自己城市的天气，对面那座岛显示对方城市的天气、昼夜和城市灯光，岛上有标牌。
+  - 两个人同时在线时，两座岛之间出现彩虹桥。
+  - 圣诞季（加 `?xmas` 可以提前预览）会出现圣诞树、拐杖糖、圣诞帽和小雪。

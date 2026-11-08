@@ -11,7 +11,18 @@ const SPOTS = {
   flowers_bed: [-2.65, 0.85, 1.2], lights: [0, 0, 0],
 };
 
-export function createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet }) {
+// 自由摆放的位置编码：n = (xi*1000 + zi)*8 + 朝向（8 档），xi/zi 是 (坐标+10)*20 取整
+export const encodePos = (x, z, rot) => (Math.round((x + 10) * 20) * 1000 + Math.round((z + 10) * 20)) * 8 + (((Math.round(rot / (Math.PI / 4)) % 8) + 8) % 8);
+export const decodePos = (n) => { const r = n % 8, v = Math.floor(n / 8); return { x: Math.floor(v / 1000) / 20 - 10, z: (v % 1000) / 20 - 10, rot: r * Math.PI / 4 }; };
+// 扭蛋装饰的默认位置（以后可以在"布置模式"里拖到任意地方）
+const GACHA_SPOTS = {
+  paper_lantern: [-0.75, 1.15, 0], pinwheel: [1.95, 2.75, 0], mushroom_lamp: [-2.3, 2.2, 0.4], bird_house: [2.95, -0.95, -1.2],
+  cat_tower: [-2.9, 0.75, 1.0], hammock: [2.75, 0.15, -1.4], star_lamp: [-0.95, -1.65, 0], carousel: [1.0, 1.25, 0],
+  hot_air_heart: [-2.6, -1.0, 0], xmas_tree: [-1.35, 1.6, 0], reindeer: [1.7, -0.45, -0.6], gingerbread: [-2.05, -2.0, 0.6],
+  snow_family: [2.3, 2.3, -0.5], candy_lane: [0.55, 2.1, 0],
+};
+
+export function createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet, extra }) {
   const mk = (geo, color, line = 0.025) => outlined(new THREE.Mesh(geo, toon(color)), line);
   const built = {}; // id -> Group（已经在岛上的）
   let catalog = {};
@@ -165,7 +176,8 @@ export function createDecor({ world, toon, outlined, tag, tree, top, leaves, get
     },
   };
 
-  const has = (id) => !!(P[id] || catalog[id]);
+  const has = (id) => !!(P[id] || catalog[id] || (extra && extra.has(id)));
+  let posOverride = {};
 
   async function loadCatalog() {
     try {
@@ -189,11 +201,14 @@ export function createDecor({ world, toon, outlined, tag, tree, top, leaves, get
   async function build(id) {
     const g = new THREE.Group();
     g.userData.item = id;
-    const spot = SPOTS[id] || [0, 0, 0];
+    const spot = SPOTS[id] || GACHA_SPOTS[id] || [0, 0, 0];
     g.position.set(spot[0], 0, spot[1]);
     g.rotation.y = spot[2];
+    if (posOverride[id] != null) { const q = decodePos(posOverride[id]); g.position.set(q.x, 0, q.z); g.rotation.y = q.rot; }
     const c = catalog[id];
-    if (c && gltfLoader && id !== "lights") {
+    if (extra && extra.has(id) && !P[id] && !c) {
+      try { const r = await extra.build(id); g.add(r.root); g.userData.anim = r.root.userData.anim; } catch (e) { console.warn("decor", id, e); }
+    } else if (c && gltfLoader && id !== "lights") {
       try {
         const gltf = await new gltfLoader().loadAsync("vendor/decor/" + c.file);
         const m = toonify(gltf.scene);
@@ -284,6 +299,7 @@ export function createDecor({ world, toon, outlined, tag, tree, top, leaves, get
     if (p && accFor !== p) accessories(p);
     for (const g of Object.values(built)) {
       if (g === true) continue;
+      if (g.userData.anim) g.userData.anim(t);
       if (g.userData.grow < 1) { g.userData.grow = Math.min(1, g.userData.grow + dt * 1.8); const k = g.userData.grow; g.scale.setScalar(Math.max(0.001, 1 + Math.sin(k * Math.PI) * 0.15 * (1 - k) - (1 - k))); }
       g.traverse((o) => {
         if (o.userData.spin) o.rotation.z = t * 1.2;
@@ -312,5 +328,15 @@ export function createDecor({ world, toon, outlined, tag, tree, top, leaves, get
     }
   }
 
-  return { loadCatalog, has, setDecor, setSnow, setLevel, update };
+  // 服务器上存的位置（布置模式拖过的）
+  function setPositions(map) {
+    posOverride = map || {};
+    for (const [id, g] of Object.entries(built)) {
+      if (g === true || g.userData.editing) continue;
+      if (posOverride[id] != null) { const q = decodePos(posOverride[id]); g.position.set(q.x, 0, q.z); g.rotation.y = q.rot; }
+    }
+  }
+  const group = (id) => (built[id] && built[id] !== true ? built[id] : null);
+  const groups = () => Object.values(built).filter((g) => g !== true);
+  return { loadCatalog, has, setDecor, setSnow, setLevel, update, setPositions, group, groups };
 }

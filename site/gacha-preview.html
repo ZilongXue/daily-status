@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gacha preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #d4f0fb; font: 14px system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  button { border: 1px solid #b9cfd8; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  button.big { background: #ffd9ea; border-color: #f0a9c6; font-weight: 600; }
+  #stat { position: fixed; top: 6px; left: 8px; font-size: 12px; color: #456; background: rgba(255,255,255,.7); padding: 4px 8px; border-radius: 6px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stat"></div>
+<div class="bar" id="bar"></div>
+<script type="module">
+// ?focus=<id> 只看一个（近景，id 可以是 machine / hat / wreath / cane / gifts / capsule 或任意装饰 id）
+// ?yaw=<deg> 全部转个角度；?spin 慢慢转；?auto 每 4 秒自动扭一次
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { buildSantaHat, buildWreath, buildCandyCane, buildGiftPile } from "./xmas3d.js";
+import { GACHA_DECOR, GACHA_RARITY, buildGachaDecor, buildGachaMachine, machineIdle, machineSpin, buildCapsule } from "./gacha3d.js";
+
+const params = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xd4f0fb);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+// 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+const T = { toon, outlined };
+
+const hemiL = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemiL, sun, camera);
+if (params.has("night")) { hemiL.color.setHex(0x7a84d8); hemiL.groundColor.setHex(0x2a3f50); hemiL.intensity = 1.1; sun.intensity = 0.7; renderer.setClearColor(0x2a3358); }
+
+function label(text, sub, color) {
+  const cv = document.createElement("canvas");
+  cv.width = 400; cv.height = 110;
+  const g = cv.getContext("2d");
+  g.fillStyle = color;
+  g.beginPath(); g.roundRect(8, 8, 384, 94, 40); g.fill();
+  g.fillStyle = "#fff";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = "bold 38px system-ui, 'PingFang SC', sans-serif";
+  g.fillText(text, 200, 44);
+  g.font = "22px system-ui, sans-serif";
+  g.fillText(sub, 200, 82);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  sp.scale.set(1.2, 0.33, 1);
+  sp.renderOrder = 10;
+  return sp;
+}
+
+// 只量 mesh（不算光晕 sprite），返回尺寸和 mesh / draw 数
+function measure(obj) {
+  obj.updateWorldMatrix(true, true);
+  const box = new THREE.Box3(), b = new THREE.Box3(), inv = new THREE.Matrix4().copy(obj.matrixWorld).invert();
+  let meshes = 0, sprites = 0, tris = 0;
+  obj.traverse((o) => {
+    if (o.isSprite) { sprites++; return; }
+    if (!o.isMesh) return;
+    meshes++;
+    const g = o.geometry;
+    tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+    if (o.material && o.material.side === THREE.BackSide) return; // 描边
+    if (!g.boundingBox) g.computeBoundingBox();
+    b.copy(g.boundingBox).applyMatrix4(new THREE.Matrix4().multiplyMatrices(inv, o.matrixWorld));
+    box.union(b);
+  });
+  const s = box.getSize(new THREE.Vector3());
+  return { size: s, min: box.min, meshes, sprites, tris: Math.round(tris) };
+}
+
+const SP_X = 1.45, SP_Y = 2.15;
+const cells = [];
+const yaw = THREE.MathUtils.degToRad(+params.get("yaw") || 0);
+const focus = params.get("focus");
+const animated = [];
+const report = {};
+let cols = 7;
+function cell(col, row, obj, title, sub, color, opt = {}) {
+  const g = new THREE.Group();
+  g.position.set(col * SP_X, -row * SP_Y, 0);
+  if (!opt.noGround) {
+    const ground = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.66, 0.08, 40), toon(0x8ed694));
+    ground.position.y = -0.04;
+    g.add(ground);
+  }
+  obj.rotation.y += yaw;
+  g.add(obj);
+  const lb = label(title, sub, color);
+  lb.position.set(0, -0.32, 0.6);
+  g.add(lb);
+  scene.add(g);
+  cells.push(g);
+  return g;
+}
+
+const items = [];
+window.byKey = {};
+const want = (id) => !focus || focus === id;
+// 第 0 行：扭蛋机、扭蛋、圣诞小物
+let machine = null, capsuleA = null, capsuleB = null;
+const row0 = [];
+if (want("machine")) row0.push(() => { machine = buildGachaMachine(T); return [machine.root, "🎰 扭蛋机", "machine"]; });
+if (want("capsule")) row0.push(() => { capsuleA = buildCapsule(0xff8fab, 0xfffaf5, T); return [capsuleA.root, "扭蛋 · 关", "capsule"]; });
+if (want("capsule")) row0.push(() => { capsuleB = buildCapsule(0x8fd3ff, 0xffd36b, T); capsuleB.top.rotation.x = -2; return [capsuleB.root, "扭蛋 · 开", "capsule2"]; });
+if (want("hat")) row0.push(() => {
+  const g = new THREE.Group();
+  const head = new THREE.Group();
+  head.position.y = 0.5;
+  const skull = outlined(new THREE.Mesh(new THREE.SphereGeometry(0.5, 26, 18), toon(0xffe0c4)), 0.03);
+  skull.scale.set(1.1, 0.94, 0.98);
+  head.add(skull);
+  for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), new THREE.MeshBasicMaterial({ color: 0x2b1d18 })); e.position.set(s * 0.17, 0.02, 0.45); head.add(e); }
+  const hat = buildSantaHat(T);
+  hat.root.position.set(0, 0.34, 0);
+  hat.root.rotation.z = -0.18;
+  head.add(hat.root);
+  g.add(head);
+  g.scale.setScalar(0.85);
+  g.userData.hat = hat.root;
+  return [g, "🎅 圣诞帽（戴在 r=0.5 头上）", "hat"];
+});
+if (want("wreath")) row0.push(() => {
+  const g = new THREE.Group();
+  const wall = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.2, 0.06), toon(0xd8a46e)), 0.02);
+  wall.position.set(0, 0.6, -0.03);
+  g.add(wall);
+  const w = buildWreath(T);
+  w.root.position.set(0, 0.68, 0);
+  g.add(w.root);
+  g.userData.wreath = w.root;
+  return [g, "🎀 花环（挂墙）", "wreath"];
+});
+if (want("cane")) row0.push(() => [buildCandyCane(T).root, "🍬 拐杖糖", "cane"]);
+if (want("gifts")) row0.push(() => [buildGiftPile(T).root, "🎁 礼物堆", "gifts"]);
+
+let row = 0;
+if (row0.length) {
+  row0.forEach((mk, i) => {
+    const [obj, title, key] = mk();
+    const m = measure(key === "hat" ? obj.userData.hat : key === "wreath" ? obj.userData.wreath : obj);
+    report[key] = m;
+    window.byKey[key] = obj;
+    cell(i, row, obj, title, `${m.size.x.toFixed(2)}×${m.size.y.toFixed(2)}×${m.size.z.toFixed(2)} · ${m.meshes}m`, "#e58fb0");
+    if (key !== "machine") items.push(obj);
+  });
+  row++;
+}
+const order = ["common", "rare", "epic"];
+for (const r of order) {
+  const list = Object.keys(GACHA_DECOR).filter((id) => GACHA_DECOR[id].rarity === r && want(id));
+  if (!list.length) continue;
+  list.forEach((id, i) => {
+    const d = buildGachaDecor(id, T);
+    const m = measure(d.root);
+    report[id] = m;
+    window.byKey[id] = d.root;
+    const info = GACHA_DECOR[id];
+    cell(i, row, d.root, `${info.emoji} ${info.name}${info.season ? " ❄" : ""}`, `${m.size.x.toFixed(2)}×${m.size.y.toFixed(2)}×${m.size.z.toFixed(2)} · ${m.meshes}m`, GACHA_RARITY[r].color);
+    if (d.root.userData.anim) animated.push(d.root);
+    items.push(d.root);
+  });
+  row++;
+}
+cols = Math.max(...cells.map((c) => Math.round(c.position.x / SP_X) + 1));
+for (const c of cells) c.position.x -= ((cols - 1) * SP_X) / 2;
+console.log("GACHA_REPORT", JSON.stringify(Object.fromEntries(Object.entries(report).map(([k, v]) => [k, { size: v.size.toArray().map((x) => +x.toFixed(3)), minY: +v.min.y.toFixed(3), meshes: v.meshes, sprites: v.sprites, tris: v.tris }]))));
+window.report = report;
+window.scene = scene;
+window.heavy = (root) => { const L = []; root.traverse((o) => { if (o.isMesh) { const g = o.geometry; L.push([(g.index ? g.index.count : g.attributes.position.count) / 3, o.material.side === THREE.BackSide ? 'outline' : o.material.type, g.attributes.position.count]); } }); return L.sort((a, b) => b[0] - a[0]).slice(0, 8); };
+
+const rows = row;
+function place() {
+  const tn = Math.tan(THREE.MathUtils.degToRad(15));
+  const one = !!focus;
+  const H = one ? 2.4 : rows * SP_Y + 0.2, W = one ? 2.2 : cols * SP_X;
+  const fit = Math.max(H / (2 * tn), W / (2 * tn * camera.aspect)) / (+params.get("zoom") || 1);
+  controls.target.set(0, params.has("ty") ? +params.get("ty") : one ? 0.65 : -((rows - 1) * SP_Y) / 2 + 0.55, 0);
+  camera.position.set(0, controls.target.y + fit * 0.3, fit);
+  controls.update();
+}
+
+// 扭一次：摇把转 → 扭蛋滚出来 → 打开 → 装饰蹦出来
+const CAPS = [[0xff8fab, 0xfffaf5], [0x8fd3ff, 0xfff2a0], [0xc3a6ff, 0xffd1e3], [0x9fe0c8, 0xffb38a], [0xffd36b, 0xff6b8b]];
+let spin = null;
+function doSpin() {
+  if (!machine) return;
+  if (spin) { spin.root.parent.remove(spin.root); }
+  const [a, b] = CAPS[Math.floor(Math.random() * CAPS.length)];
+  const cap = buildCapsule(a, b, T);
+  const ids = Object.keys(GACHA_DECOR);
+  const prize = buildGachaDecor(ids[Math.floor(Math.random() * ids.length)], T).root;
+  const g = new THREE.Group();
+  g.add(cap.root, prize);
+  prize.visible = false;
+  machine.root.add(g);
+  g.visible = false;
+  spin = { t0: clock.elapsedTime, cap, prize, root: g };
+}
+function tickSpin(t) {
+  if (!spin || !machine) return false;
+  const u = t - spin.t0, D = 1.3;
+  if (u < D) { machineSpin(machine, u / D); return true; }
+  const v = u - D;
+  const g = spin.root, c = spin.cap;
+  const chute = machine.chute.position;
+  g.visible = true;
+  if (v < 0.7) {
+    const k = v / 0.7;
+    g.position.set(0, chute.y * (1 - k) + Math.sin(k * Math.PI) * 0.25, chute.z + k * 0.28);
+    c.root.scale.setScalar(0.35 + 0.35 * k);
+    c.root.rotation.x = k * Math.PI * 2;
+    machineSpin(machine, 1);
+  } else {
+    machineIdle(machine, t);
+    g.position.set(0, 0, chute.z + 0.28);
+    c.root.rotation.x = 0;
+    const w = v - 0.7;
+    c.root.scale.setScalar(0.7);
+    c.root.rotation.z = w < 0.6 ? Math.sin(w * 30) * 0.15 * (1 - w / 0.6) : 0;
+    const o = Math.min(1, Math.max(0, (w - 0.6) / 0.3));
+    c.top.rotation.x = -2 * (1 - (1 - o) ** 3);
+    const p = Math.min(1, Math.max(0, (w - 0.75) / 0.5));
+    spin.prize.visible = p > 0;
+    const bounce = p < 1 ? Math.sin(p * Math.PI * 0.5) * (1 + Math.sin(p * Math.PI) * 0.25) : 1;
+    spin.prize.scale.setScalar(Math.max(0.001, 0.32 * bounce));
+    spin.prize.position.set(0.0, 0.12 + p * 0.1, 0.0);
+    spin.prize.rotation.y = (1 - p) * 3;
+    if (spin.prize.userData.anim) spin.prize.userData.anim(t);
+  }
+  return true;
+}
+
+const bar = document.getElementById("bar");
+const btn = (text, fn, cls) => { const b = document.createElement("button"); b.textContent = text; b.onclick = fn; if (cls) b.className = cls; bar.appendChild(b); return b; };
+btn("🎰 扭一次", doSpin, "big");
+const state = { anim: true };
+btn("动画", () => { state.anim = !state.anim; });
+for (const [k, deg] of Object.entries({ "正面": 0, "3/4": 40, "侧面": 90, "背面": 180 })) btn(k, () => { for (const c of items) c.rotation.y = THREE.MathUtils.degToRad(deg); if (machine) machine.root.rotation.y = THREE.MathUtils.degToRad(deg); });
+window.doSpin = doSpin;
+window.seek = (u) => { if (spin) spin.t0 = clock.elapsedTime - u; };
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  place();
+}
+addEventListener("resize", resize);
+resize();
+
+const clock = new THREE.Clock();
+let frames = 0, fpsT = 0, lastAuto = 0;
+const st = document.getElementById("stat");
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta());
+  const t = clock.elapsedTime;
+  if (state.anim) {
+    for (const r of animated) r.userData.anim(t);
+    if (!tickSpin(t) && machine) machineIdle(machine, t);
+    if (params.has("spin")) for (const c of items) c.rotation.y = t * 0.5;
+    if (params.has("auto") && t - lastAuto > 4.5) { lastAuto = t; doSpin(); }
+  }
+  frames++; fpsT += dt;
+  if (fpsT > 1) { st.textContent = `${Math.round(frames / fpsT)} fps · ${renderer.info.render.calls} draws · ${Math.round(renderer.info.render.triangles)} tris`; frames = 0; fpsT = 0; }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

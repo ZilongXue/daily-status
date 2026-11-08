@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>小窝</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦖</text></svg>">
-<link rel="stylesheet" href="style.css?v=7">
+<link rel="stylesheet" href="style.css?v=8">
 <script type="importmap">
 { "imports": {
   "three": "./vendor/three.module.min.js",
@@ -81,15 +81,31 @@
           <b class="star-count">⭐ <span id="stars">0</span></b>
           <span class="level" id="level"></span>
           <span class="spacer"></span>
-          <button type="button" data-act="earn" class="mini">怎么赚星星</button>
-          <button type="button" data-act="book">📖 图鉴</button>
-          <button type="button" data-act="shop">🛍 商店</button>
+          <button type="button" data-panel="earn" class="mini">怎么赚星星</button>
         </div>
-        <div class="earn small" id="earn" hidden></div>
-        <div class="shop" id="shop" hidden></div>
-        <div class="book" id="book" hidden></div>
+        <div class="tabs" id="tabs">
+          <button type="button" data-panel="shop">🛍 商店</button>
+          <button type="button" data-panel="gacha">🎰 扭蛋</button>
+          <button type="button" data-panel="farm">🌱 菜地</button>
+          <button type="button" data-panel="wardrobe">👗 衣橱</button>
+          <button type="button" data-panel="qa">📝 每日一问</button>
+          <button type="button" data-panel="book">📖 图鉴</button>
+        </div>
+        <div class="earn small panel" id="earn" hidden></div>
+        <div class="panel" id="shop-wrap" hidden><div class="shop" id="shop"></div></div>
+        <div class="book panel" id="book" hidden></div>
+        <div class="panel" id="gacha" hidden></div>
+        <div class="panel" id="farm" hidden></div>
+        <div class="panel" id="wardrobe" hidden></div>
+        <div class="panel" id="qa" hidden></div>
       </div>
       <p class="her-status small" id="her-status"></p>
+      <div class="edit-bar" id="edit-bar" hidden>
+        <span id="edit-hint">点一件装饰，拖到想放的地方</span>
+        <button type="button" data-edit="rotate">↻ 转一下</button>
+        <button type="button" data-edit="done" class="primary">✓ 完成</button>
+        <button type="button" data-edit="cancel">取消</button>
+      </div>
       <div class="actions" id="actions"></div>
       <div class="tray" id="tray" hidden></div>
       <form class="note" id="note-form" hidden>
@@ -151,9 +167,9 @@
 
 <canvas id="fx" aria-hidden="true"></canvas>
 <script src="vendor/lottie_light.min.js"></script>
-<script src="config.js?v=7"></script>
-<script src="app.js?v=7"></script>
-<script src="social.js?v=7"></script>
-<script type="module" src="scene3d.js?v=7"></script>
+<script src="config.js?v=8"></script>
+<script src="app.js?v=8"></script>
+<script src="social.js?v=8"></script>
+<script type="module" src="scene3d.js?v=8"></script>
 </body>
 </html>

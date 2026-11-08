@@ -32,7 +32,10 @@ async function line(e, rawKey, n) {
   if (e.kind === "nudge") return `🌙 ${n}催你睡觉啦！30 分钟内睡着，小岛就能拿 3 颗星星`;
   if (e.kind === "buy") return `${n}用星星给小岛买了新装饰 🎁`;
   if (e.kind === "mood") return `${n}现在的心情：${{ happy: "开心 😊", tired: "累了 😮‍💨", miss: "想你 🥺", angry: "有点气 😤", sleepy: "困了 😪" }[e.item] || "💭"}`;
-  if (e.kind === "sleep") return `${n}去睡觉啦 😴 晚安`;
+  if (e.kind === "sleep") return `${n}说晚安啦 🌙 去给她盖个被子吧`;
+  if (e.kind === "answer") return `📝 ${n}回答了今天的每日一问，你也去答吧（答完才能看到她的答案）`;
+  if (e.kind === "tuck") return `🛏 ${n}给你盖好了被子，晚安～`;
+  if (e.kind === "gacha") return `🎰 ${n}扭到了一个史诗级的宝贝！`;
   if (e.kind === "wake") return `${n}醒啦 ☀️`;
   if (e.kind === "act") return `${n}${{ hug: "抱了抱你 🤗", pat: "摸了摸你的头 🫳", kiss: "亲了你一下 😘", highfive: "和你击了个掌 🙌", poke: "戳了戳你 👉", ride: "骑着小马绕岛兜风 🐴" }[e.item] || "来岛上找你玩了"}`;
   if (e.kind === "fish") return `🎣 ${n}钓到了${{ koi: "锦鲤", jelly: "小水母", octopus: "小章鱼", bottle: "一个漂流瓶", whale: "迷你鲸鱼", turtle: "小海龟", chest: "宝箱", goldkoi: "金锦鲤！", mermaid: "美人鱼的珍珠！", star: "一颗坠落的星星！" }[e.item] || "好东西"}`;

@@ -2,7 +2,7 @@
 // 全部程序生成，没有外部模型。scene3d.js 负责小伙伴和互动，这里只管环境。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=7";
+import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=8";
 
 export const SEA_Y = -0.85;   // 海面高度（草地表面是 y = 0）
 export const ISLAND_R = 3.25; // 草地的最小半径（装饰的位置都按这个算）
@@ -266,8 +266,8 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
     }
     return g;
   };
-  for (const [x, z, kind, s] of [[-2.45, -4.35, "r", 1.0], [-0.6, -5.2, "r", 1.15], [2.65, -4.85, "r", 0.85], [-3.0, -4.75, "p", 1.0],
-    [1.6, -5.4, "p", 1.15], [-1.1, -5.6, "p", 0.9], [-2.6, -5.4, "r", 0.8]]) {
+  for (const [x, z, kind, s] of [[-2.45, -4.35, "r", 1.0], [-0.55, -5.35, "r", 1.1], [2.65, -4.85, "r", 0.85], [-3.0, -4.75, "p", 1.0],
+    [2.3, -5.55, "p", 1.1], [-1.1, -5.6, "p", 0.9], [-2.6, -5.4, "r", 0.8]]) {
     const t = kind === "r" ? roundTree(0.48, 0x5cb86d, 0x6fcf86) : pine(1.3, 0x4fa86a);
     t.position.set(x, mainHeight(x, z) - 0.03, z);
     t.scale.setScalar(s);
@@ -358,7 +358,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   updaters.push((t) => { windU.value = t; });
 
   /* ------------------------------------------------------------ 小灌木 */
-  for (const [x, z, s] of [[-3.75, 0.35, 0.9], [3.6, -0.6, 0.8], [-1.35, 3.1, 0.8], [2.1, 2.9, 0.7], [-2.5, -3.9, 0.85], [0.4, -4.35, 0.75], [2.85, -4.05, 0.7], [3.3, -2.2, 0.6]]) {
+  for (const [x, z, s] of [[-3.75, 0.35, 0.9], [3.6, -0.6, 0.8], [-1.35, 3.1, 0.8], [2.1, 2.9, 0.7], [-2.5, -3.9, 0.85], [-0.35, -4.0, 0.7], [2.85, -4.05, 0.7], [3.3, -2.2, 0.6]]) {
     const b = new THREE.Group();
     for (const [dx, dy, dz, r, c] of [[0, 0.2, 0, 0.3, 0x5fae5f], [0.24, 0.14, 0.06, 0.22, 0x6fc06a], [-0.2, 0.13, 0.08, 0.2, 0x58a85a]]) {
       const m = mk(new THREE.SphereGeometry(r, 12, 9), c, 0.025);
@@ -452,7 +452,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   palmIs.add(p1, p2, umb);
 
   // 远山岛：远处一座大一点的绿岛，有小山和一排树（雾让它有距离感）
-  const far = islet(4, -17, { R0: 3.0, H: SEA_Y + 1.4, seed: 31, cliff: (a) => 0.3 + 0.5 * bump(angDist(a, Math.PI / 2), 1.2), wob: 0.25, slope: [1.6, 0.5], beach: [0.8, 0.3] });
+  const far = islet(4, -15.5, { R0: 3.0, H: SEA_Y + 1.4, seed: 31, cliff: (a) => 0.3 + 0.5 * bump(angDist(a, Math.PI / 2), 1.2), wob: 0.25, slope: [1.6, 0.5], beach: [0.8, 0.3] });
   const hill = mk(new THREE.SphereGeometry(1.7, 20, 14), 0x8fd072, 0.03);
   hill.scale.set(1.2, 0.75, 1); hill.position.set(-0.6, far.userData.topY, -0.8);
   const hill2 = mk(new THREE.SphereGeometry(1.1, 18, 12), 0x9ad978, 0.03);
@@ -646,7 +646,9 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
     }
   });
 
-  return { top, ground, sea, dock, env, update, setSky, splash, SEA_Y, heightAt: mainHeight };
+  // 对面那座岛 = 对方的城市（extras3d 往上面加天气、灯、标牌）
+  const farInfo = { group: far, center: new THREE.Vector3(4, 0, -15.5), topY: far.userData.topY, mesh: far.children[0], radius: 3.4 };
+  return { top, ground, sea, dock, env, update, setSky, splash, SEA_Y, heightAt: mainHeight, far: farInfo };
 }
 
 function makeGull(mk) {
