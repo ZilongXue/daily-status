@@ -61,7 +61,7 @@ async function boot() {
   if (KEY) {
     try { show(await decrypt(KEY, BLOB)); return; } catch {}
     // 记住的密钥对不上这份数据：先用上次缓存的密文试试（可能刚好在部署中途），还不行才是真的换了密码
-    try { const old = JSON.parse(store.get(BLOB_KEY) || "null"); if (old) { show(await decrypt(KEY, old)); return; } } catch {}
+    try { const old = JSON.parse(store.get(BLOB_KEY) || "null"); if (old) { const d = await decrypt(KEY, old); BLOB = old; show(d); return; } } catch {}
     KEY = null;
   }
   lockScreen();
