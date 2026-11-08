@@ -258,7 +258,7 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 /* ---------------- wallet & shop ---------------- */
 .wallet { margin: 10px 0 4px; padding: 10px 12px; border-radius: 14px; background: linear-gradient(135deg, #fff7d6, #ffeef4); }
 .wallet-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.wallet-head .stars { font: 800 20px ui-rounded, system-ui, sans-serif; }
+.wallet-head .star-count { font: 800 20px ui-rounded, system-ui, sans-serif; }
 .wallet-head .level { font-size: 12.5px; color: #a26a00; }
 .wallet-head .spacer { flex: 1; }
 .wallet-head button { font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 7px 12px; cursor: pointer; background: #fff; box-shadow: 0 2px 0 #f1d5c4; }
