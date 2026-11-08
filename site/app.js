@@ -139,7 +139,6 @@ function show(d, quiet) {
   renderTiles(d);
   renderWeek(d);
   if (!quiet) renderHeat(d);
-  renderWorkouts(d);
   window.NEST = { data: d, mood: moodOf(d) };
   dispatchEvent(new Event("nest:update"));
 }
@@ -187,7 +186,7 @@ function lines(d) {
   if (t.band === "red") out.push(`今天电量只有 ${t.recovery}%…需要你的抱抱充电 🥺`, "今天有点累，提醒他早点休息吧");
   if (s.hours != null && s.hours >= 8) out.push(`昨晚睡了 ${s.hours} 小时，美滋滋 😴`);
   if (s.hours != null && s.hours < 6) out.push(`昨晚只睡了 ${s.hours} 小时…快催他早点睡！`);
-  const recent = (w.workouts || []).slice(-1)[0];
+  const recent = null; // 运动记录不导出、不显示
   if (recent) out.push(`最近一次运动：${SPORT_ZH[recent.sport] || recent.sport} ${SPORT[recent.sport] || "✨"}${recent.minutes ? "，" + fmtDur(recent.minutes) : ""}`);
   if (t.steps) out.push(`今天走了 ${t.steps.toLocaleString()} 步 👣`);
   if (st.regular_sleep >= 2) out.push(`已经连续 ${st.regular_sleep} 天作息规律，夸夸他！`);
@@ -368,14 +367,6 @@ $("#heat").addEventListener("click", (ev) => {
   $("#heat-tip").textContent = `${date}：${bits.join(" · ") || "数据不全"}`;
 });
 
-function renderWorkouts(d) {
-  const ws = ((d.week || {}).workouts || []).slice().reverse();
-  $("#workouts-card").hidden = !ws.length;
-  $("#workouts").innerHTML = ws.map((w) => {
-    const day = w.start ? `${+w.start.slice(5, 7)}/${+w.start.slice(8, 10)} 周${WD[new Date(w.start.slice(0, 10) + "T12:00:00Z").getUTCDay()]}` : "";
-    return `<li><span class="emo">${SPORT[w.sport] || "✨"}</span><span><b>${SPORT_ZH[w.sport] || w.sport}</b><span class="muted small">${day}${w.minutes ? " · " + fmtDur(w.minutes) : ""}${w.strain != null ? " · 强度 " + w.strain : ""}</span></span></li>`;
-  }).join("");
-}
 
 /* ---------------------------------------------------------------- Noto 动态 emoji（Lottie，CC BY 4.0） */
 const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
