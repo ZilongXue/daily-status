@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import hashlib
 import json
 import os
 import subprocess
@@ -66,6 +67,7 @@ def set_password() -> None:
     STATE.mkdir(exist_ok=True)
     SALT_FILE.write_text(b64(os.urandom(16)))  # 换密码顺便换 salt，旧设备上记住的密钥自动失效
     print("已存进钥匙串。下次发布后，看的人需要输入新密码。")
+    print("互动功能的令牌也跟着变了：跑 `python3 publish.py --api-hash | (cd worker && npx wrangler secret put ACCESS_HASH)` 更新 Worker。")
 
 
 def salt() -> bytes:
@@ -75,9 +77,19 @@ def salt() -> bytes:
     return base64.b64decode(SALT_FILE.read_text())
 
 
+def derive_key(pw: str) -> bytes:
+    return PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt(), iterations=ITERATIONS).derive(pw.encode())
+
+
+def api_hash(pw: str) -> str:
+    """互动 API 的访问令牌 = sha256(页面密钥 || "nest-api-v1")，浏览器端算法相同；Worker 里只存令牌的 sha256。"""
+    token = hashlib.sha256(derive_key(pw) + b"nest-api-v1").hexdigest()
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def encrypt(plaintext: bytes, pw: str) -> dict:
     s = salt()
-    key = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=s, iterations=ITERATIONS).derive(pw.encode())
+    key = derive_key(pw)
     iv = os.urandom(12)
     ct = AESGCM(key).encrypt(iv, plaintext, None)
     return {"v": 1, "kdf": "PBKDF2-SHA256", "iter": ITERATIONS, "salt": b64(s), "iv": b64(iv), "ct": b64(ct)}
@@ -103,9 +115,13 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="导出 -> 加密 -> 推送")
     ap.add_argument("--local", action="store_true", help="只生成 site/data.enc.json，不推送")
     ap.add_argument("--set-password", action="store_true")
+    ap.add_argument("--api-hash", action="store_true", help="打印互动 API 令牌的 sha256（给 Worker 的 ACCESS_HASH，用管道传，别贴到聊天里）")
     args = ap.parse_args()
     if args.set_password:
         set_password()
+        return 0
+    if args.api_hash:
+        print(api_hash(password()))
         return 0
     subprocess.run([sys.executable, str(EXPORT), "--out", str(STATUS)], check=True)
     blob = encrypt(STATUS.read_bytes(), password())

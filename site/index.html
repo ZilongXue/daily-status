@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex, nofollow">
 <meta name="referrer" content="no-referrer">
 <title>小窝</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐱</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦖</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
@@ -24,7 +24,7 @@
 <section id="lock" class="lock" hidden>
   <div class="lock-card">
     <div class="lock-pet">
-      <span class="sprite emoji-pet sleeping" data-pet-emoji>🐱</span>
+      <span class="sprite emoji-pet sleeping" data-pet-emoji>🦖</span>
       <span class="zzz"><i>z</i><i>z</i><i>Z</i></span>
     </div>
     <h1 class="title">Zilong 的小窝</h1>
@@ -53,18 +53,41 @@
     <div class="bubble" id="bubble"></div>
     <button class="px-toggle" id="px-toggle" type="button">高清</button>
     <div class="species" role="group" aria-label="换个小伙伴">
-      <button type="button" data-species="cat" title="猫猫">🐱</button><button type="button" data-species="penguin" title="企鹅">🐧</button><button type="button" data-species="chick" title="小鸡">🐥</button>
+      <button type="button" data-species="dino" title="小恐龙">🦖</button><button type="button" data-species="cat" title="猫猫">🐱</button><button type="button" data-species="penguin" title="企鹅">🐧</button><button type="button" data-species="chick" title="小鸡">🐥</button>
     </div>
     <p class="hint small" id="hint">点它 · 按住摸摸头 · 点草地它会跑过去 · 左右拖动转小岛</p>
     <div class="pet-wrap" id="pet-wrap">
       <button class="pet" id="pet" aria-label="戳一下">
-        <span class="sprite emoji-pet" id="sprite" data-pet-emoji>🐱</span>
+        <span class="sprite emoji-pet" id="sprite" data-pet-emoji>🦖</span>
         <span class="zzz" id="pet-zzz"><i>z</i><i>z</i><i>Z</i></span>
         <span class="sparkles" id="sparkles"><i>✦</i><i>✧</i><i>✦</i></span>
       </button>
       <div class="shadow"></div>
     </div>
     <p class="poke-count small" id="poke-count"></p>
+  </section>
+
+  <section class="card social" id="social" hidden>
+    <div class="who-pick" id="who-pick" hidden>
+      <p>第一次来，先告诉小窝你是谁：</p>
+      <button type="button" data-who="her">我是她 💕</button><button type="button" data-who="me">我是 Zilong</button>
+    </div>
+    <div id="social-main">
+      <div class="anger" id="anger" hidden>
+        <div class="anger-head"><b>😤 气消条</b><span id="combo" class="combo"></span></div>
+        <div class="meter"><i id="anger-fill"></i></div>
+        <p class="small" id="anger-text"></p>
+      </div>
+      <div class="full"><span class="small muted">饱腹</span><div class="meter green"><i id="full-fill"></i></div><span class="small" id="full-text"></span></div>
+      <div class="actions" id="actions"></div>
+      <div class="tray" id="tray" hidden></div>
+      <form class="note" id="note-form" hidden>
+        <textarea maxlength="200" rows="2" placeholder="写点什么…（只有你们俩看得到）"></textarea>
+        <button type="submit">寄出 💌</button>
+      </form>
+      <h2 class="tl-title">我们的小日记</h2>
+      <ul class="timeline" id="timeline"></ul>
+    </div>
   </section>
 
   <section class="tiles">
@@ -117,7 +140,9 @@
 
 <canvas id="fx" aria-hidden="true"></canvas>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.13.0/lottie_light.min.js"></script>
+<script src="config.js"></script>
 <script src="app.js"></script>
+<script src="social.js"></script>
 <script type="module" src="scene3d.js"></script>
 </body>
 </html>

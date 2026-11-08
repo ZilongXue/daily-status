@@ -245,6 +245,7 @@ function poked(x, y) {
   renderPokes();
 }
 $("#pet").addEventListener("click", () => {
+  if (window.NEST_MODE === "angry") return; // 生气模式下点它是揍（social.js 处理）
   const pet = $("#pet");
   pet.classList.remove("boing"); void pet.offsetWidth; pet.classList.add("boing");
   const r = pet.getBoundingClientRect();
@@ -252,8 +253,8 @@ $("#pet").addEventListener("click", () => {
 });
 
 // 换小伙伴时，2D 备用版和锁屏也跟着换
-const PET_EMOJI = { cat: "🐱", penguin: "🐧", chick: "🐥" };
-function syncPetEmoji(kind) { document.querySelectorAll("[data-pet-emoji]").forEach((e) => { e.textContent = PET_EMOJI[kind] || "🐱"; }); }
+const PET_EMOJI = { dino: "🦖", cat: "🐱", penguin: "🐧", chick: "🐥" };
+function syncPetEmoji(kind) { document.querySelectorAll("[data-pet-emoji]").forEach((e) => { e.textContent = PET_EMOJI[kind] || "🦖"; }); }
 syncPetEmoji(store.get("nest.species"));
 addEventListener("nest:species", (ev) => syncPetEmoji(ev.detail.kind));
 
@@ -262,12 +263,14 @@ addEventListener("nest:tap", (ev) => {
   const { what, x, y } = ev.detail;
   if (!DATA) return;
   if (what === "pet") {
+    if (window.NEST_MODE === "angry") return;
     poked(x, y);
     if (ev.detail.react === "wave") say("嗨～ 👋 今天也想你了");
     if (ev.detail.react === "blush") say("被你戳得脸红了 ☺️");
     if (ev.detail.react === "stir") say("唔…再睡五分钟…（他大概真的在睡觉）");
     return;
   }
+  if (what === "gift") { say("他送的花 🌹（会在花瓶里放两天）"); hearts(x, y, 8); return; }
   if (what === "pet-hold") { hearts(x, y, 10); say("被摸头了，好舒服～ 💕"); return; }
   if (what === "ground-sleep") { say("嘘——小声点，它在充电中 🌙"); return; }
   const t = DATA.today || {}, s = DATA.last_sleep || {}, w = DATA.week || {}, b = DATA.bio || {}, st = DATA.streaks || {};

@@ -5,6 +5,9 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { buildPet, SPECIES } from "./pet3d.js";
+import { buildDino } from "./dino3d.js";
+
+const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
 const params = new URLSearchParams(location.search);
 const sceneEl = document.getElementById("scene");
@@ -165,6 +168,40 @@ const crystalWrap = new THREE.Group();
 crystalWrap.add(crystal, crystalLight);
 world.add(tag(crystalWrap, "crystal"));
 
+// 他送的花：插在小花瓶里，48 小时内最多 3 枝
+const vase = new THREE.Group();
+const pot = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.34, 12), toon(0x9fd3ff)), 0.025);
+pot.position.y = 0.17;
+vase.add(pot);
+const roses = [-0.09, 0.0, 0.09].map((x, i) => {
+  const r = new THREE.Group();
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.5, 5), toon(0x3f9a55));
+  stem.position.y = 0.25;
+  const bloom = outlined(new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), toon(i === 1 ? 0xff4d6d : 0xff7a93)), 0.02);
+  bloom.position.y = 0.52;
+  bloom.scale.set(1, 0.85, 1);
+  r.add(stem, bloom);
+  r.position.set(x, 0.2, 0);
+  r.rotation.z = -x * 2.5;
+  r.visible = false;
+  vase.add(r);
+  return r;
+});
+vase.position.set(1.35, 0, 1.45);
+vase.visible = false;
+world.add(tag(vase, "gift"));
+
+function makeBandage() {
+  const g = new THREE.Group();
+  const a = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.02), toon(0xffe4c9));
+  const b = a.clone(); b.rotation.z = Math.PI / 2;
+  g.add(a, b);
+  g.position.set(0.24, 0.3, 0.36);
+  g.rotation.set(-0.5, 0.45, 0.6);
+  g.visible = false;
+  return g;
+}
+
 /* ---------------------------------------------------------------- sprites: Zzz, sparkles, hearts */
 function textSprite(text, color, size = 64) {
   const c = document.createElement("canvas");
@@ -217,7 +254,7 @@ function applySky(h) {
 
 /* ---------------------------------------------------------------- pet */
 let pet = null;
-let kind = SPECIES[store.get("nest.species")] ? store.get("nest.species") : "cat";
+let kind = KINDS[store.get("nest.species")] ? store.get("nest.species") : "dino"; // 默认是她送的小恐龙
 const PET_SCALE = 1.4; // 小伙伴是主角，比岛上的东西大一号
 const home = new THREE.Vector3(0.35, 0, 0.75);
 const walkTo = home.clone();
@@ -229,9 +266,12 @@ function setSpecies(k) {
     const i = tappables.indexOf(pet.root);
     if (i >= 0) tappables.splice(i, 1);
   }
-  kind = SPECIES[k] ? k : "cat";
+  kind = KINDS[k] ? k : "dino";
   store.set("nest.species", kind);
-  pet = buildPet(kind, { toon, outlined });
+  pet = kind === "dino" ? buildDino({ toon, outlined }) : buildPet(kind, { toon, outlined });
+  pet.bandage = makeBandage();
+  pet.bandage.visible = angry;
+  pet.head.add(pet.bandage);
   pet.root.position.copy(walkTo);
   world.add(pet.root);
   tappables.push(pet.root);
@@ -301,7 +341,9 @@ const ray = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 const pointer = { x: 0, y: 0, active: false, last: 0 };
 let downAt = null, holdTimer = 0, holding = false, holdHeartTimer = 0;
-let react = { kind: "", t0: -10 };
+let react = { kind: "", t0: -10, dir: 1 };
+let angry = false;
+const REACT_DUR = { eat: 1.6, bow: 1.9, hit: 0.6, love: 1.6 };
 
 function pick(e) {
   const r = renderer.domElement.getBoundingClientRect();
@@ -353,7 +395,7 @@ renderer.domElement.addEventListener("pointerup", (e) => {
     return;
   }
   if (what === "pet") {
-    const kinds = mood === "sleep" ? ["stir"] : ["jump", "wave", "blush", "spin"];
+    const kinds = window.NEST_MODE === "angry" ? ["hit"] : mood === "sleep" ? ["stir"] : ["jump", "wave", "blush", "spin"];
     react = { kind: kinds[Math.floor(Math.random() * kinds.length)], t0: clock.elapsedTime };
     const h = screenOf(headWorld());
     dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "pet", react: react.kind, x: h.x, y: h.y } }));
@@ -428,9 +470,16 @@ function animate(t, dt) {
     rz = Math.sin(t * 1.8) * 0.05;
     sy = 1 + Math.sin(t * 3.6) * 0.015;
   }
-  // 点它的反应
-  if (since < 1.2) {
-    const k = since / 1.2;
+  // 生气模式：低着头、身子缩一点（她在气头上）
+  if (angry && !sleep) { rx += 0.14; sy *= 0.95; }
+  // 点它 / 互动的反应
+  const dur = REACT_DUR[react.kind] || 1.2;
+  if (since < dur) {
+    const k = since / dur;
+    if (react.kind === "eat") { const c = Math.abs(Math.sin(since * 14)); sy *= 1 - c * 0.06; sx *= 1 + c * 0.03; y += 0.04; }
+    if (react.kind === "hit") { const h = 1 - k; sx *= 1 + 0.35 * h; sy *= 1 - 0.3 * h; rz += react.dir * 0.55 * h; y += Math.sin(k * Math.PI) * 0.15; }
+    if (react.kind === "bow") { rx += 0.75 * Math.sin(Math.min(1, since / 0.45) * Math.PI / 2) * (since < 1.4 ? 1 : (dur - since) / (dur - 1.4)); }
+    if (react.kind === "love") { y += Math.abs(Math.sin(since * 6)) * 0.25; }
     if (react.kind === "jump") { y += Math.sin(Math.min(1, since / 0.6) * Math.PI) * 0.9; }
     if (react.kind === "spin") { y += Math.sin(Math.min(1, since / 0.7) * Math.PI) * 0.5; ry = ease(since / 0.7) * Math.PI * 2; }
     if (react.kind === "blush") { rz += Math.sin(k * Math.PI * 3) * 0.12; }
@@ -465,7 +514,12 @@ function animate(t, dt) {
   if (sleep) eyes = since < 0.8 && react.kind === "stir" ? "half" : "sleep";
   else if (holding || mood === "happy") eyes = "happy";
   else if (mood === "tired") eyes = "half";
-  if (since < 1.2 && !sleep) eyes = since < 0.35 ? "wide" : "happy";
+  else if (angry) eyes = "half";
+  if (since < dur && !sleep) {
+    if (react.kind === "hit") eyes = since < 0.25 ? "wide" : "sleep";
+    else if (react.kind === "bow") eyes = "sleep";
+    else eyes = since < 0.35 && react.kind !== "eat" && react.kind !== "love" ? "wide" : "happy";
+  }
   if (!sleep && eyes !== "happy" && t > blinkAt) { eyes = "sleep"; if (t > blinkAt + 0.13) blinkAt = t + 2 + Math.random() * 3.5; }
   // 累的时候偶尔打哈欠
   let yawning = false;
@@ -474,6 +528,7 @@ function animate(t, dt) {
   }
   P.setEyes(eyes);
   P.yawn.visible = yawning;
+  if (react.kind === "eat" && since < dur) { P.yawn.visible = true; P.yawn.scale.setScalar(0.3 + Math.abs(Math.sin(since * 14)) * 0.9); }
   if (yawning) P.yawn.scale.setScalar(0.6 + Math.sin(Math.min(1, (t - yawnAt) / 1.6) * Math.PI) * 0.8);
   P.blushMat.opacity = holding || (react.kind === "blush" && since < 2) ? 0.95 : 0.55;
 
@@ -503,7 +558,8 @@ function animate(t, dt) {
     P.bubble.visible = !popped;
     P.bubble.scale.setScalar(0.4 + Math.sin(b * Math.PI) * 1.2);
   }
-  if (mood === "tired") P.sweat.position.y = 0.2 + Math.sin(t * 2.5) * 0.03;
+  P.sweat.visible = (mood === "tired" || angry) && !sleep;
+  if (P.sweat.visible) P.sweat.position.y = 0.2 + Math.sin(t * 2.5) * 0.03;
 
   // ---- 水晶
   const head = headWorld();
@@ -536,7 +592,7 @@ function animate(t, dt) {
     const tw = Math.sin(t * 4 + i * 1.7) * 0.5 + 0.5;
     s.material.opacity = tw; s.scale.setScalar(0.16 + tw * 0.14);
   });
-  if (holding && t - holdHeartTimer > 0.35) {
+  if ((holding || (react.kind === "love" && since < dur)) && t - holdHeartTimer > 0.35) {
     holdHeartTimer = t;
     const s = floatHearts.find((h) => t - h.userData.t0 > 1.4);
     if (s) { s.userData.t0 = t; s.userData.dx = (Math.random() - 0.5) * 0.6; }
@@ -579,6 +635,14 @@ document.querySelectorAll("[data-species]").forEach((b) => b.addEventListener("c
   setSpecies(b.dataset.species);
   react = { kind: "jump", t0: clock.elapsedTime };
 }));
+
+/* ---------------------------------------------------------------- 给 social.js 用的接口 */
+window.NEST3D = {
+  react(k) { react = { kind: k, t0: clock.elapsedTime, dir: Math.random() < 0.5 ? -1 : 1 }; },
+  setAngry(on) { angry = !!on; if (pet && pet.bandage) pet.bandage.visible = angry; },
+  setFlowers(n) { vase.visible = n > 0; roses.forEach((r, i) => { r.visible = i < n; }); },
+  headScreen() { return pet ? screenOf(headWorld()) : null; },
+};
 
 /* ---------------------------------------------------------------- boot */
 setSpecies(kind);

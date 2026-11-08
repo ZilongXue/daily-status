@@ -1,0 +1,15 @@
+name = "nest-api"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+ALLOWED_ORIGINS = "https://zilongxue.github.io,http://localhost:8765"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "nest"
+database_id = "00000000-0000-0000-0000-000000000000" # 部署前换成 `wrangler d1 create nest` 给的 id
+
+# 密钥（不写在这里，用 `wrangler secret put` 设置）：
+#   ACCESS_HASH  = sha256(访问令牌) 的十六进制；令牌由页面密码派生，见 ../publish.py --api-hash
+#   BARK_KEY     = Bark App 里的设备 key（可选；没有就不推送）
