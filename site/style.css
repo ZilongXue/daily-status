@@ -102,7 +102,7 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 .pet-wrap { position: absolute; left: 50%; bottom: 40px; width: 170px; transform: translateX(-50%); }
 .scene3d { position: absolute; inset: 0; }
 .scene3d canvas { display: block; width: 100%; height: 100%; }
-.scene.has3d, .scene.loading3d { height: 380px; }
+.scene.has3d, .scene.loading3d { height: 420px; }
 .scene.loading3d .pet-wrap, .scene.loading3d .hill { visibility: hidden; }
 .scene.loading3d::after { content: "小岛浮上来中…"; position: absolute; left: 0; right: 0; top: 55%; text-align: center; color: rgba(255,255,255,.8); font-size: 13px; }
 .scene.has3d .pet-wrap, .scene.has3d .hill, .scene.has3d .cloud { display: none; }
@@ -271,3 +271,30 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 .shop .item small { font-size: 11px; color: var(--muted); text-align: center; }
 .shop .item.poor { opacity: .5; }
 .shop .item.owned { background: #f2fff6; } .shop .item.owned.on { outline: 2px solid var(--green); }
+
+/* ---- v3：她的状态、钓鱼、图鉴 */
+.her-status { margin: 6px 2px 0; color: var(--muted); min-height: 1em; }
+.her-status:empty { display: none; }
+.book .shop { margin-top: 6px; }
+.shop .item.book { cursor: default; }
+.shop .item.book.none { background: #f6f1ec; opacity: .7; }
+.shop .item.book.r-rare { box-shadow: 0 2px 0 #b9dcf7; } .shop .item.book.r-epic { box-shadow: 0 2px 0 #dcc3f2; } .shop .item.book.r-legend { box-shadow: 0 2px 0 #f2d983; background: #fffbea; }
+.bite { position: fixed; z-index: 70; transform: translate(-50%, -130%); font: 800 18px ui-rounded, system-ui, "PingFang SC", sans-serif; color: #fff;
+  background: #ff6b6b; border: 0; border-radius: 99px; padding: 10px 16px; box-shadow: 0 4px 0 #d94f4f; cursor: pointer; animation: bite .35s infinite alternate; }
+@keyframes bite { from { transform: translate(-50%, -130%) scale(1); } to { transform: translate(-50%, -140%) scale(1.12); } }
+.catch-card { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; background: rgba(40, 30, 60, .35); animation: fadein .25s; }
+.catch-card .cc-in { width: min(300px, 86vw); padding: 20px 18px 16px; border-radius: 22px; background: #fffdf8; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.25);
+  animation: pop .45s cubic-bezier(.2, 1.6, .4, 1); }
+.catch-card .cc-emo { font-size: 72px; line-height: 1.1; margin: 6px 0; animation: wob 1.6s ease-in-out infinite; }
+.catch-card b { font: 800 22px ui-rounded, system-ui, "PingFang SC", sans-serif; display: block; }
+.catch-card small { font-weight: 800; letter-spacing: 1px; }
+.catch-card .first { color: #e0679b; font-weight: 700; margin: 8px 0 0; }
+.catch-card .gain { font: 800 20px ui-rounded, system-ui, sans-serif; color: #c98a00; margin: 6px 0 0; }
+.catch-card .bottle { background: #f3f8ff; border-radius: 12px; padding: 10px; margin: 10px 0 0; font-size: 14px; line-height: 1.6; text-align: left; }
+.catch-card button { margin-top: 14px; font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 9px 26px; background: #ffd9e4; cursor: pointer; }
+.catch-card.r-rare .cc-in { box-shadow: 0 0 0 3px #8fc8f5, 0 10px 40px rgba(0,0,0,.25); }
+.catch-card.r-epic .cc-in { box-shadow: 0 0 0 3px #c79bf0, 0 0 40px rgba(170, 110, 240, .6); }
+.catch-card.r-legend .cc-in { box-shadow: 0 0 0 3px #f5cd45, 0 0 60px rgba(255, 200, 40, .8); background: linear-gradient(160deg, #fffbe8, #fff3f8); }
+@keyframes pop { from { transform: scale(.4); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+@keyframes fadein { from { opacity: 0; } }
+@keyframes wob { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg) translateY(-4px); } }

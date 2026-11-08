@@ -4,9 +4,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js";
-import { buildDino } from "./dino3d.js";
-import { createDecor } from "./decor3d.js";
+import { buildPet, SPECIES } from "./pet3d.js?v=4";
+import { buildDino } from "./dino3d.js?v=4";
+import { createDecor } from "./decor3d.js?v=4";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=4";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -22,18 +23,20 @@ let pixelMode = store.get("nest.pixel") === "px";
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "low-power" });
 renderer.setClearColor(0x000000, 0);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 host.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
-camera.position.set(0, 4.6, 11.5);
+camera.position.set(0, 5.2, 12.5);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0.9, 0);
+controls.target.set(0, 0.55, 0);
 controls.enablePan = false;
 controls.enableZoom = false;
 controls.enableDamping = true;
-controls.minPolarAngle = controls.maxPolarAngle = 1.17; // 转盘：只能左右转
+controls.minPolarAngle = controls.maxPolarAngle = 1.13; // 转盘：只能左右转
 controls.autoRotate = !REDUCED;
 controls.autoRotateSpeed = 0.5;
 renderer.domElement.style.touchAction = "pan-y"; // 竖着划照常滚动页面，横着划转小岛
@@ -70,31 +73,29 @@ const world = new THREE.Group();
 scene.add(world);
 const tappables = [];
 const tag = (obj, what) => { obj.traverse((o) => { o.userData.what = what; }); tappables.push(obj); return obj; };
-const ISLAND_R = 3.25;
+const W = createWorld({ scene, world, toon, outlined, tag });
+const top = W.top;
 
-const top = outlined(new THREE.Mesh(new THREE.CylinderGeometry(ISLAND_R, 3.05, 0.5, 18), toon(0x9ad978)), 0.04);
-top.position.y = -0.25;
-const dirt = outlined(new THREE.Mesh(new THREE.ConeGeometry(3.05, 3.4, 18), toon(0xc08a5e)), 0.04);
-dirt.rotation.x = Math.PI;
-dirt.position.y = -0.5 - 1.7;
-world.add(tag(top, "ground"), dirt);
-for (const [x, y, z, s] of [[1.6, -1.4, 1.3, 0.35], [-1.2, -2.1, 1.0, 0.28], [0.3, -2.8, 0.7, 0.22], [-1.9, -0.9, -1.1, 0.3]]) {
-  const r = outlined(new THREE.Mesh(new THREE.DodecahedronGeometry(s, 0), toon(0xa59a90)), 0.03);
-  r.position.set(x, y, z);
-  world.add(r);
-}
-
-// 规律树
+// 规律树：一团一团蓬松的树冠，挂几个小桃子
 const tree = new THREE.Group();
-const trunk = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 0.8, 8), toon(0x8a5a3b)), 0.03);
-trunk.position.y = 0.4;
-const leaves = [[0.72, 1.2], [0.56, 1.62], [0.38, 1.98]].map(([r, y], i) => {
-  const m = outlined(new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), toon(i % 2 ? 0x6fcf86 : 0x58b873)), 0.035);
-  m.position.y = y;
-  m.scale.y = 0.8;
+const trunk = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.19, 0.95, 9), toon(0x8a5a3b)), 0.03);
+trunk.position.y = 0.47;
+const branch = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.5, 7), toon(0x8a5a3b)), 0.025);
+branch.position.set(0.18, 0.85, 0.05); branch.rotation.z = -0.8;
+const LEAF = [0x58b873, 0x6fcf86, 0x4fae6a, 0x7fd88e];
+const leaves = [[0, 1.35, 0, 0.62], [0.42, 1.2, 0.18, 0.45], [-0.4, 1.22, 0.1, 0.47], [0.05, 1.25, -0.4, 0.48],
+  [0.1, 1.75, 0.05, 0.47], [-0.22, 1.6, 0.32, 0.36], [0.3, 1.58, -0.22, 0.36], [0.02, 2.08, 0, 0.3]].map(([x, y, z, r], i) => {
+  const m = outlined(new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), toon(LEAF[i % LEAF.length])), 0.035);
+  m.position.set(x, y, z);
+  m.scale.y = 0.85;
   return m;
 });
-tree.add(trunk, ...leaves);
+const peaches = [[0.45, 1.0, 0.45], [-0.5, 1.05, 0.38], [0.2, 1.45, 0.55], [-0.15, 1.95, 0.32]].map(([x, y, z]) => {
+  const pch = outlined(new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), toon(0xffa3a3)), 0.015);
+  pch.position.set(x, y, z);
+  return pch;
+});
+tree.add(trunk, branch, ...leaves, ...peaches);
 tree.position.set(1.95, 0, -1.25);
 world.add(tag(tree, "tree"));
 
@@ -226,6 +227,18 @@ const floatHearts = Array.from({ length: 6 }, () => { const s = textSprite("♥"
 const hemi = new THREE.HemisphereLight(0xdff3ff, 0x6f8f5a, 1.6);
 const sun = new THREE.DirectionalLight(0xffffff, 2.2);
 sun.position.set(5, 8, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: 1, far: 25 });
+sun.shadow.bias = -0.0015;
+sun.shadow.normalBias = 0.02;
+// 影子：小伙伴、树、床、装饰投影（描边、草、花这些小东西不投，省性能）
+function castShadows() {
+  for (const o of [tree, bed, ...(pet ? [pet.root] : []), ...extraCasters, ...castActors]) o.traverse((m) => {
+    if (m.isMesh && !m.material.side) m.castShadow = true; // 描边是 BackSide（side=1），不投影
+  });
+}
+const extraCasters = [], castActors = [];
 const fill = new THREE.DirectionalLight(0xffffff, 0.6); // 跟着相机的柔光，夜里也看得清脸
 fill.position.set(0, 0.4, 1);
 camera.add(fill);
@@ -248,6 +261,7 @@ function applySky(h) {
   const k = h >= 5 && h < 7.5 ? "dawn" : h >= 7.5 && h < 17 ? "day" : h >= 17 && h < 19.5 ? "dusk" : "night";
   skyKind = k;
   const s = SKY[k];
+  W.setSky(k);
   hemi.color.setHex(s.hemi[0]); hemi.groundColor.setHex(s.hemi[1]); hemi.intensity = s.hemi[2];
   sun.color.setHex(s.sun[0]); sun.intensity = s.sun[1];
   lampLight.intensity = s.lamp;
@@ -261,6 +275,7 @@ let kind = KINDS[store.get("nest.species")] ? store.get("nest.species") : "dino"
 const PET_SCALE = 1.4; // 小伙伴是主角，比岛上的东西大一号
 const home = new THREE.Vector3(0.35, 0, 0.75);
 const walkTo = home.clone();
+let arriveCb = null, faceFn = null;
 
 function setSpecies(k) {
   if (pet) {
@@ -279,6 +294,7 @@ function setSpecies(k) {
   world.add(pet.root);
   tappables.push(pet.root);
   placePet(true);
+  castShadows();
   document.querySelectorAll("[data-species]").forEach((b) => b.classList.toggle("on", b.dataset.species === kind));
   dispatchEvent(new CustomEvent("nest:species", { detail: { kind } }));
 }
@@ -388,9 +404,20 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 8;
   downAt = null;
   if (moved) return;
+  if (cast && cast.pull()) return;
   const hit = pick(e);
   if (!hit) return;
   const what = hit.object.userData.what;
+  if (what === "her" || what === "pony") {
+    const at = what === "her" ? cast.kittenScreen() : { x: e.clientX, y: e.clientY };
+    dispatchEvent(new CustomEvent("nest:tap", { detail: { what, ...at } }));
+    return;
+  }
+  if (what === "sea" || what === "beach") {
+    W.splash(world.worldToLocal(hit.point.clone()));
+    dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "sea", x: e.clientX, y: e.clientY } }));
+    return;
+  }
   if (what === "ground") {
     if (mood === "sleep") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "ground-sleep", x: e.clientX, y: e.clientY } })); return; }
     const p = world.worldToLocal(hit.point.clone());
@@ -421,7 +448,7 @@ function resize() {
   renderer.setSize(w, h);
   renderer.domElement.style.imageRendering = pixelMode ? "pixelated" : "auto";
   camera.aspect = w / h;
-  camera.position.setLength(w < 500 ? 13 : 11);
+  camera.position.setLength(w < 500 ? 18 : 13.5);
   camera.updateProjectionMatrix();
 }
 new ResizeObserver(resize).observe(host);
@@ -432,6 +459,8 @@ const lerp = (a, b, k) => a + (b - a) * k;
 const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 
 function animate(t, dt) {
+  W.update(t, dt);
+  if (cast) cast.update(t, dt, skyKind, world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())));
   decor.update(t, dt, skyKind === "night" || skyKind === "dusk");
   if (!pet) return;
   const P = pet, sleep = mood === "sleep";
@@ -449,10 +478,11 @@ function animate(t, dt) {
       const yaw = Math.atan2(tmp.x, tmp.z);
       P.root.rotation.y = lerpAngle(P.root.rotation.y, yaw, 0.2);
     } else {
-      // 停下来以后慢慢转向镜头
-      const cam = camera.getWorldPosition(new THREE.Vector3());
-      const toCam = world.worldToLocal(cam).sub(P.root.position);
-      P.root.rotation.y = lerpAngle(P.root.rotation.y, Math.atan2(toCam.x, toCam.z), 0.04);
+      if (arriveCb) { const cb = arriveCb; arriveCb = null; cb(); }
+      // 停下来以后慢慢转向镜头（演互动时转向对方）
+      const f = faceFn && faceFn();
+      const toT = f ? f.clone().sub(P.root.position) : world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())).sub(P.root.position);
+      P.root.rotation.y = lerpAngle(P.root.rotation.y, Math.atan2(toT.x, toT.z), f ? 0.12 : 0.04);
     }
   }
 
@@ -627,8 +657,32 @@ function loop(now) {
   const dt = Math.min(0.1, t - lastT);
   lastT = t;
   animate(REDUCED ? 0 : t, dt);
+  focusCamera();
   controls.update();
   renderer.render(scene, camera);
+}
+
+// 钓鱼时镜头转到码头的斜侧面，看得清甩竿和浮漂；钓完再接着慢慢转
+const DOCK_VIEW = Math.atan2(-DOCK.dir.z + 0.7 * DOCK.dir.x, DOCK.dir.x + 0.7 * DOCK.dir.z);
+const baseTarget = controls.target.clone(), dockTarget = DOCK.base.clone().lerp(DOCK.tip, 0.55).setY(0.2);
+let wasFishing = false;
+function focusCamera() {
+  const f = !!(cast && cast.fishing());
+  if (f) {
+    controls.autoRotate = false;
+    const off = camera.position.clone().sub(controls.target);
+    const r = off.length(), th = lerpAngle(Math.atan2(off.x, off.z), DOCK_VIEW, 0.03), ph = Math.acos(off.y / r);
+    controls.target.lerp(dockTarget, 0.03);
+    camera.position.copy(controls.target).add(new THREE.Vector3(Math.sin(ph) * Math.sin(th), Math.cos(ph), Math.sin(ph) * Math.cos(th)).multiplyScalar(r));
+  } else {
+    if (wasFishing) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000);
+    if (controls.target.distanceToSquared(baseTarget) > 1e-4) {
+      const off = camera.position.clone().sub(controls.target);
+      controls.target.lerp(baseTarget, 0.04);
+      camera.position.copy(controls.target).add(off);
+    }
+  }
+  wasFishing = f;
 }
 
 /* ---------------------------------------------------------------- buttons */
@@ -642,6 +696,25 @@ document.querySelectorAll("[data-species]").forEach((b) => b.addEventListener("c
   react = { kind: "jump", t0: clock.elapsedTime };
 }));
 
+/* ---------------------------------------------------------------- 她的小猫 + 小马、钓鱼（cast3d.js，加载失败也不影响别的） */
+let cast = null;
+const dinoApi = {
+  root: () => pet.root, parts: () => pet, scale: () => PET_SCALE, home: () => home.clone(),
+  sleeping: () => mood === "sleep",
+  react: (k) => { react = { kind: k, t0: clock.elapsedTime, dir: Math.random() < 0.5 ? -1 : 1 }; },
+  face: (fn) => { faceFn = fn; },
+  go: (p) => new Promise((res) => {
+    if (mood === "sleep") { res(); return; }
+    walkTo.copy(p).setY(0); arriveCb = res;
+  }),
+};
+const castReady = import("./cast3d.js?v=4").then(({ createCast }) => {
+  cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf });
+  castActors.push(cast.kitten.root, cast.pony.root);
+  castShadows();
+  return cast;
+}).catch((e) => { console.warn("cast3d", e); return null; });
+
 /* ---------------------------------------------------------------- 给 social.js 用的接口 */
 window.NEST3D = {
   react(k) { react = { kind: k, t0: clock.elapsedTime, dir: Math.random() < 0.5 ? -1 : 1 }; },
@@ -652,6 +725,13 @@ window.NEST3D = {
   setSnow: (on) => decor.setSnow(on),
   setLevel: (n) => decor.setLevel(n),
   hasDecor: (id) => decor.has(id),
+  castReady,
+  play: (kind, who, item) => (cast ? cast.play(kind, who, item) : Promise.resolve()),
+  setHer: (st) => cast && cast.setState(st),
+  fish: (who, request) => (cast ? cast.fish(who, request) : request()),
+  pullFish: () => cast && cast.pull(),
+  fishing: () => !!(cast && cast.fishing()),
+  setBook: (b) => cast && cast.setBook(b),
 };
 
 /* ---------------------------------------------------------------- boot */
@@ -662,4 +742,5 @@ requestAnimationFrame(loop);
 sceneEl.classList.add("has3d");
 sceneEl.classList.remove("loading3d");
 decor.loadCatalog().finally(() => dispatchEvent(new Event("nest:3dready")));
+setInterval(() => { extraCasters.length = 0; world.children.forEach((c) => { if (c.userData.item) extraCasters.push(c); }); castShadows(); }, 3000);
 setTimeout(() => document.getElementById("hint")?.classList.add("gone"), 9000);

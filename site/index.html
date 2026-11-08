@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <title>小窝</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦖</text></svg>">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=4">
 <script type="importmap">
 { "imports": {
   "three": "./vendor/three.module.min.js",
@@ -82,11 +82,14 @@
           <span class="level" id="level"></span>
           <span class="spacer"></span>
           <button type="button" data-act="earn" class="mini">怎么赚星星</button>
+          <button type="button" data-act="book">📖 图鉴</button>
           <button type="button" data-act="shop">🛍 商店</button>
         </div>
         <div class="earn small" id="earn" hidden></div>
         <div class="shop" id="shop" hidden></div>
+        <div class="book" id="book" hidden></div>
       </div>
+      <p class="her-status small" id="her-status"></p>
       <div class="actions" id="actions"></div>
       <div class="tray" id="tray" hidden></div>
       <form class="note" id="note-form" hidden>
@@ -148,9 +151,9 @@
 
 <canvas id="fx" aria-hidden="true"></canvas>
 <script src="vendor/lottie_light.min.js"></script>
-<script src="config.js"></script>
-<script src="app.js"></script>
-<script src="social.js"></script>
-<script type="module" src="scene3d.js"></script>
+<script src="config.js?v=4"></script>
+<script src="app.js?v=4"></script>
+<script src="social.js?v=4"></script>
+<script type="module" src="scene3d.js?v=4"></script>
 </body>
 </html>

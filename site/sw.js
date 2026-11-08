@@ -31,6 +31,11 @@ async function line(e, rawKey, n) {
   if (e.kind === "calm") return `${n}气消了 🌈`;
   if (e.kind === "nudge") return `🌙 ${n}催你睡觉啦！30 分钟内睡着，小岛就能拿 3 颗星星`;
   if (e.kind === "buy") return `${n}用星星给小岛买了新装饰 🎁`;
+  if (e.kind === "mood") return `${n}现在的心情：${{ happy: "开心 😊", tired: "累了 😮‍💨", miss: "想你 🥺", angry: "有点气 😤", sleepy: "困了 😪" }[e.item] || "💭"}`;
+  if (e.kind === "sleep") return `${n}去睡觉啦 😴 晚安`;
+  if (e.kind === "wake") return `${n}醒啦 ☀️`;
+  if (e.kind === "act") return `${n}${{ hug: "抱了抱你 🤗", pat: "摸了摸你的头 🫳", kiss: "亲了你一下 😘", highfive: "和你击了个掌 🙌", poke: "戳了戳你 👉", ride: "骑着小马绕岛兜风 🐴" }[e.item] || "来岛上找你玩了"}`;
+  if (e.kind === "fish") return `🎣 ${n}钓到了${{ koi: "锦鲤", jelly: "小水母", octopus: "小章鱼", bottle: "一个漂流瓶", whale: "迷你鲸鱼", turtle: "小海龟", chest: "宝箱", goldkoi: "金锦鲤！", mermaid: "美人鱼的珍珠！", star: "一颗坠落的星星！" }[e.item] || "好东西"}`;
   if (e.kind === "note") { const t = rawKey && e.box ? await openNote(e.box, rawKey) : null; return t ? `${n}的纸条：「${t}」` : `${n}给你留了一张纸条 💌`; }
   return null;
 }
