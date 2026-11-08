@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>小窝</title>
+<link rel="icon" href="assets/monster_48_front.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+
+<!-- 锁屏 -->
+<section id="lock" class="lock" hidden>
+  <div class="lock-card">
+    <div class="lock-pet">
+      <img src="assets/monster_48_front.png" alt="" class="sprite sleeping">
+      <span class="zzz"><i>z</i><i>z</i><i>Z</i></span>
+    </div>
+    <h1 class="title">Zilong 的小窝</h1>
+    <p class="muted">小浣熊在门口睡着了，说出暗号叫醒它</p>
+    <form id="lock-form" autocomplete="off">
+      <input id="pw" type="password" placeholder="暗号" autocomplete="current-password" required>
+      <label class="remember"><input id="remember" type="checkbox" checked> 记住这台设备</label>
+      <button type="submit" id="unlock-btn">进门</button>
+      <p id="lock-msg" class="lock-msg" aria-live="polite"></p>
+    </form>
+  </div>
+</section>
+
+<!-- 主页面 -->
+<main id="app" hidden>
+  <header class="top">
+    <h1 class="title">Zilong 今天怎么样</h1>
+    <p class="clocks"><span id="clock-his"></span><span id="clock-you"></span></p>
+    <p class="muted small" id="synced"></p>
+  </header>
+
+  <section class="scene loading3d" id="scene">
+    <div class="sky"><div class="stars"></div><div class="orb"></div><div class="cloud c1"></div><div class="cloud c2"></div></div>
+    <div class="hill"></div>
+    <div class="scene3d" id="scene3d"></div>
+    <div class="bubble" id="bubble"></div>
+    <button class="px-toggle" id="px-toggle" type="button">像素</button>
+    <p class="hint small" id="hint">左右拖动转小岛 · 点点岛上的东西</p>
+    <div class="pet-wrap" id="pet-wrap">
+      <button class="pet" id="pet" aria-label="戳一下">
+        <img src="assets/monster_48_front.png" alt="小浣熊" class="sprite" id="sprite">
+        <span class="zzz" id="pet-zzz"><i>z</i><i>z</i><i>Z</i></span>
+        <span class="sparkles" id="sparkles"><i>✦</i><i>✧</i><i>✦</i></span>
+      </button>
+      <div class="shadow"></div>
+    </div>
+    <p class="poke-count small" id="poke-count"></p>
+  </section>
+
+  <section class="tiles">
+    <article class="tile" id="t-recovery">
+      <h2><span class="emo" id="e-recovery">🔋</span>恢复</h2>
+      <div class="ring"><svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"/><circle class="bar" cx="60" cy="60" r="50"/></svg><div class="ring-label"><b class="num" data-k="recovery"></b><span class="unit">%</span></div></div>
+      <p class="tag" id="recovery-tag"></p>
+      <p class="muted small" id="bio"></p>
+    </article>
+    <article class="tile" id="t-sleep">
+      <h2><span class="emo" id="e-sleep">😴</span>昨晚睡眠</h2>
+      <p class="big"><b class="num" data-k="sleep"></b><span class="unit">小时</span></p>
+      <p class="muted small" id="sleep-times"></p>
+      <div class="stages" id="stages"></div>
+      <p class="legend small"><span><i class="sws"></i>深睡</span><span><i class="rem"></i>REM</span><span><i class="light"></i>浅睡</span><span><i class="awake"></i>醒着</span></p>
+    </article>
+    <article class="tile" id="t-strain">
+      <h2><span class="emo" id="e-strain">💪</span>今日活动</h2>
+      <div class="ring"><svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"/><circle class="bar" cx="60" cy="60" r="50"/></svg><div class="ring-label"><b class="num" data-k="strain"></b><span class="unit">/21</span></div></div>
+      <p class="tag" id="strain-tag"></p>
+      <p class="muted small" id="steps"></p>
+    </article>
+    <article class="tile" id="t-regular">
+      <h2><span class="emo" id="e-regular">🌝</span>作息规律度</h2>
+      <p class="big"><b class="num" data-k="sri"></b><span class="unit">/100</span></p>
+      <p class="muted small">最近 7 天，越高越规律</p>
+      <p class="streak" id="streak"></p>
+    </article>
+  </section>
+
+  <section class="card">
+    <h2>这一周</h2>
+    <div class="week" id="week"></div>
+    <p class="muted small" id="week-note"></p>
+  </section>
+
+  <section class="card">
+    <h2>作息日历 <span class="muted small">每一格是一天，颜色越深越规律</span></h2>
+    <div class="heat-wrap"><div class="heat" id="heat"></div></div>
+    <p class="muted small" id="heat-tip">点一下格子看那天的数据</p>
+  </section>
+
+  <section class="card" id="workouts-card">
+    <h2>最近运动</h2>
+    <ul class="workouts" id="workouts"></ul>
+  </section>
+
+  <footer class="foot small muted">
+    <p>数据来自 Zilong 的可穿戴设备（经 WHOOP API 读取），每小时同步一次，非 WHOOP 官方页面。</p>
+    <p>小浣熊：isaiah658 “50+ Monsters Pack”（CC0）· 动态 emoji：Google Noto Animated Emoji（CC BY 4.0）</p>
+    <p><a href="#" id="logout">退出这台设备</a></p>
+  </footer>
+</main>
+
+<canvas id="fx" aria-hidden="true"></canvas>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.13.0/lottie_light.min.js"></script>
+<script src="app.js"></script>
+<script type="module" src="scene3d.js"></script>
+</body>
+</html>
