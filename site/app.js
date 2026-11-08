@@ -29,10 +29,23 @@ async function cachedKey(blob) {
   if (!raw) return null;
   try { return await crypto.subtle.importKey("raw", b64d(raw), "AES-GCM", true, ["decrypt"]); } catch { return null; }
 }
-async function fetchBlob() {
+const BLOB_KEY = "nest.blob"; // 上一次成功解密的密文（只存密文），网络抖动 / 正在部署时拿它顶上
+async function fetchOnce() {
   const r = await fetch("data.enc.json?t=" + Date.now(), { cache: "no-store" });
   if (!r.ok) throw new Error("没拿到数据（" + r.status + "）");
-  return r.json();
+  const b = await r.json();
+  if (!b || !b.ct || !b.salt) throw new Error("数据不完整");
+  return b;
+}
+async function fetchBlob() {
+  let err;
+  for (const wait of [0, 1500, 4000]) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    try { return await fetchOnce(); } catch (e) { err = e; }
+  }
+  const cached = store.get(BLOB_KEY);
+  if (cached) { try { return JSON.parse(cached); } catch {} }
+  throw err;
 }
 
 /* ---------------------------------------------------------------- boot */
@@ -46,7 +59,10 @@ async function boot() {
   try { BLOB = await fetchBlob(); } catch (e) { lockScreen(String(e.message || e)); return; }
   KEY = await cachedKey(BLOB);
   if (KEY) {
-    try { show(await decrypt(KEY, BLOB)); return; } catch { KEY = null; }
+    try { show(await decrypt(KEY, BLOB)); return; } catch {}
+    // 记住的密钥对不上这份数据：先用上次缓存的密文试试（可能刚好在部署中途），还不行才是真的换了密码
+    try { const old = JSON.parse(store.get(BLOB_KEY) || "null"); if (old) { show(await decrypt(KEY, old)); return; } } catch {}
+    KEY = null;
   }
   lockScreen();
 }
@@ -83,6 +99,7 @@ $("#lock-form").addEventListener("submit", async (ev) => {
 $("#logout").addEventListener("click", (ev) => {
   ev.preventDefault();
   Object.keys(localStorage).filter((k) => k.startsWith(KEY_PREFIX)).forEach((k) => store.del(k));
+  store.del(BLOB_KEY);
   location.reload();
 });
 
@@ -132,6 +149,7 @@ const WD = ["日", "一", "二", "三", "四", "五", "六"];
 
 function show(d, quiet) {
   DATA = d;
+  if (BLOB) store.set(BLOB_KEY, JSON.stringify(BLOB));
   $("#lock").hidden = true;
   $("#app").hidden = false;
   renderClocks(d);
