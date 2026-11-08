@@ -5,7 +5,7 @@
 ## 数据流
 
 ```
-launchd（每小时）
+launchd（每 10 分钟）
   └─ ~/Documents/health/whoop/whoop.py sync          # 拉 WHOOP API -> whoop.db（不变）
   └─ python3 publish.py
        ├─ whoop/export_status.py -> whoop/data/status.json   # 明文，只在本机，字段白名单在 FIELDS
@@ -48,9 +48,9 @@ python3 -m http.server 8765 -d site        # 本地预览 http://localhost:8765/
 - 动态 emoji：Google Noto Animated Emoji（CC BY 4.0），本地副本在 `site/vendor/noto/`。署名放在 `site/index.html` 底部的注释里（页面上不显示文字）。
 - Three.js r170、lottie-web 5.13.0、标题字体（ZCOOL KuaiLe 子集，OFL）全部放在 `site/vendor/`：她在国内，Google Fonts / jsDelivr 打不开或不稳定，页面不能有任何外部请求。
 
-## 每小时自动更新
+## 每 10 分钟自动更新
 
-`hourly.sh` 由 `~/Library/LaunchAgents/com.zilong.whoop-sync.plist` 每小时调用：先 `whoop.py sync`，成功后 `publish.py`。
+`hourly.sh` 由 `~/Library/LaunchAgents/com.zilong.whoop-sync.plist` 每 10 分钟调用（StartInterval 600）：先 `whoop.py sync`，成功后 `publish.py`。
 
 launchd 起的 `/bin/sh` 读不了 `~/Documents`，所以实际跑的是装到外面的一份副本；改了 `hourly.sh` 要重新装：
 
@@ -64,7 +64,7 @@ launchctl kickstart gui/$(id -u)/com.zilong.whoop-sync     # 手动跑一次，�
 ## 星星和小岛商店（2026-11-08）
 
 - 星星是两个人共用的金库，只用来装扮小岛。余额、购买、摆放都由后端（`worker/`）核算，网页改不了价格也刷不了星星。
-- 手环规则在 `stars.py`（每小时跟在 publish 后面跑，用 `state/sys_token` 调 `/mint`，每条规则每天只发一次）：
+- 手环规则在 `stars.py`（每次跟在 publish 后面跑，用 `state/sys_token` 调 `/mint`，每条规则每天只发一次）：
   按时睡（`state/profile.json` 的 `bedtime`）+3、睡够 7 小时 +2、恢复绿 +1、作息规律 +1、负荷 ≥ 10 +1、连续 3 晚按时睡 +5、她催睡后 30 分钟内睡着 +3、开张礼包 +10。
 - 互动规则在 Worker：每天第一次喂食 +1、同一天互相留言 +1、和好 +1。
 - 装饰：`site/decor3d.js`（固定摆位、下雪、等级饰品），模型在 `site/vendor/decor/`（CC0 / CC-BY 3.0，署名见 `CREDITS.md`）。

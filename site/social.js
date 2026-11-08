@@ -421,7 +421,7 @@
       <li>🏸 今天动起来了 <b>+1</b> · 🔥 连续 3 晚按时睡 <b>+5</b></li>
       <li>🔔 ${HER()}点"该睡觉啦"，他 30 分钟内睡着 <b>+3</b></li>
       <li>🍙 每天第一次喂食 <b>+1</b> · 💌 同一天互相留言 <b>+1</b> · 🌈 吵架后和好 <b>+1</b></li></ul>
-      <p class="muted">手环的星星每小时结算一次。最近入账：${(wallet.recent || []).slice(0, 5).map((x) => `${REASONS[x.item.split(":")[0]] || x.item} +${x.n}`).join(" · ") || "还没有"}</p>`;
+      <p class="muted">手环的星星每 10 分钟结算一次。最近入账：${(wallet.recent || []).slice(0, 5).map((x) => `${REASONS[x.item.split(":")[0]] || x.item} +${x.n}`).join(" · ") || "还没有"}</p>`;
     if ($("#shop").hidden) return;
     const owned = new Set(wallet.owned || []), shown = wallet.shown || {}, prices = wallet.prices || {};
     const ids = Object.keys(ITEMS).filter((k) => prices[k] != null && (!window.NEST3D || !window.NEST3D.hasDecor || k === "snow" || window.NEST3D.hasDecor(k)));
