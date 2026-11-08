@@ -17,10 +17,11 @@ const MEADOW = [[0.0, 3.75], [1.3, 3.65], [2.5, 3.1], [3.5, 2.15], [4.05, 0.95],
 const UPPER = [[-3.0, -3.3], [-1.8, -3.35], [-0.6, -3.65], [0.6, -3.8], [1.55, -3.6], [2.3, -3.75], [3.15, -4.3], [3.05, -5.5], [1.2, -6.05],
   [-1.3, -6.0], [-3.2, -5.2], [-4.3, -4.1]];
 // 小河：瀑布下面的水潭 → 绕过右后方 → 入海
-export const POOL = { x: -1.25, z: -2.95, r: 0.62 };
+export const POOL = { x: -1.25, z: -2.95, r: 0.55 };
+const SPRING = { x: -1.7, z: -4.8, r: 0.42 }; // 高台上的泉水小池
 const RIVER = [[-1.25, -2.95], [-1.95, -2.75], [-2.6, -2.35], [-3.1, -1.75], [-3.55, -1.1], [-4.1, -0.7], [-4.8, -0.45], [-5.6, -0.3], [-6.3, -0.2]];
 // 高台上的小泉眼 → 瀑布口
-const CREEK = [[-1.65, -4.75], [-1.45, -4.15], [-1.25, -3.68]];
+const CREEK = [[-1.6, -4.45], [-1.42, -4.05], [-1.25, -3.68]];
 export const FALL_TOP = { x: -1.25, z: -3.54 };
 export const BRIDGE = { x: -3.1, z: -1.75 };
 // 土路：家 → 码头，家 → 床，家 → 小桥
@@ -112,10 +113,12 @@ function carve(x, z, h) {
   if (dp < POOL.r + 0.35) h = Math.min(h, h - 0.42 * (1 - smooth(POOL.r * 0.6, POOL.r + 0.35, dp)));
   // 小河：越往下游越宽
   const dr = riverD(x, z);
-  if (dr < 0.6) h -= 0.3 * (1 - smooth(0.18, 0.5, dr));
+  if (dr < 0.55) h -= 0.3 * (1 - smooth(0.16, 0.42, dr));
   // 高台上的小溪
   const dk = creekD(x, z);
-  if (dk < 0.35 && h > 1.2) h -= 0.16 * (1 - smooth(0.09, 0.3, dk));
+  if (dk < 0.45 && h > 1.2) h -= 0.18 * (1 - smooth(0.14, 0.34, dk));
+  const ds = Math.hypot(x - SPRING.x, z - SPRING.z);
+  if (ds < SPRING.r + 0.25 && h > 1.2) h -= 0.22 * (1 - smooth(SPRING.r * 0.6, SPRING.r + 0.25, ds));
   return h;
 }
 export const heightAt = (x, z) => carve(x, z, landH(x, z));
@@ -256,9 +259,9 @@ export function buildWater({ toon, outlined }) {
   }
   // 小河：河面跟着地势往下走，入海处贴着海面
   const riverY = (x, z) => Math.max(SEA_Y + 0.015, Math.min(-0.1, landH(x, z) - 0.12));
-  g.add(ribbon(riverPoly, 0.5, 0.95, riverY, flow(0.55, 0.9)));
+  g.add(ribbon(riverPoly, 0.5, 0.8, riverY, flow(0.55, 0.9)));
   // 高台上的小溪
-  g.add(ribbon(creekPoly, 0.18, 0.3, (x, z) => landH(x, z) - 0.07, flow(0.8, 0.92, 0.2)));
+  g.add(ribbon(creekPoly, 0.42, 0.56, (x, z) => landH(x, z) - 0.08, flow(0.8, 0.92, 0.18)));
   // 水潭
   const pool = new THREE.Mesh(new THREE.CircleGeometry(POOL.r + 0.06, 36), new THREE.ShaderMaterial({
     uniforms: U, transparent: true, depthWrite: false,
@@ -277,25 +280,99 @@ export function buildWater({ toon, outlined }) {
   pool.position.set(POOL.x, -0.11, POOL.z);
   pool.raycast = () => {};
   g.add(pool);
-  // 小溪源头的小泉眼：一圈圆石
-  const sx = CREEK[0][0], sz = CREEK[0][1], sy = landH(sx, sz);
-  for (let i = 0; i < 7; i++) {
-    const a = (i / 7) * Math.PI * 2, r = outlined(new THREE.Mesh(new THREE.DodecahedronGeometry(0.1 + (i % 3) * 0.025, 0), toon(0xbdb3a8)), 0.02);
-    r.position.set(sx + Math.cos(a) * 0.26, sy - 0.02, sz + Math.sin(a) * 0.26);
+  // 高台上的泉水小池：水面 + 一圈大小不一的圆石
+  const sy = landH(SPRING.x, SPRING.z);
+  const spring = new THREE.Mesh(new THREE.CircleGeometry(SPRING.r + 0.04, 28), pool.material);
+  spring.rotation.x = -Math.PI / 2;
+  spring.position.set(SPRING.x, sy - 0.1, SPRING.z);
+  spring.scale.setScalar(0.95);
+  spring.raycast = () => {};
+  g.add(spring);
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2 + 0.3;
+    if (Math.abs(((a - Math.atan2(CREEK[1][1] - SPRING.z, CREEK[1][0] - SPRING.x) + Math.PI * 3) % (Math.PI * 2)) - Math.PI) < 0.45) continue; // 出水口空着
+    const r = outlined(new THREE.Mesh(new THREE.DodecahedronGeometry(0.09 + (i % 3) * 0.035, 0), toon(i % 2 ? 0xc4bab0 : 0xb1a69b)), 0.018);
+    r.position.set(SPRING.x + Math.cos(a) * (SPRING.r + 0.08), sy - 0.03, SPRING.z + Math.sin(a) * (SPRING.r + 0.08));
     r.rotation.set(i, i * 2, 0);
+    r.scale.y = 0.75;
     g.add(r);
   }
+
+  // 河岸：鹅卵石沿着两岸、芦苇一丛丛长在弯道和水潭边、水潭里几片荷叶
+  const rnd = (() => { let sd = 3; return () => (sd = (sd * 16807) % 2147483647) / 2147483647; })();
+  const pebbleCols = [0xc9bfb3, 0xb6aa9c, 0xd8cfc3, 0xa99d90];
+  const bank = (poly, w0, w1, every, yOf) => {
+    for (let i = 1; i < poly.length - 1; i += every) {
+      const [x, z] = poly[i], [px, pz] = poly[i - 1], [nx2, nz2] = poly[i + 1];
+      const tx = nx2 - px, tz = nz2 - pz, L = Math.hypot(tx, tz) || 1, w = (w0 + (w1 - w0) * (i / (poly.length - 1))) / 2;
+      for (const side of [-1, 1]) {
+        if (rnd() < 0.35) continue;
+        const off = w + 0.06 + rnd() * 0.12, bx = x - (tz / L) * off * side, bz = z + (tx / L) * off * side;
+        const r = outlined(new THREE.Mesh(new THREE.DodecahedronGeometry(0.045 + rnd() * 0.06, 0), toon(pebbleCols[Math.floor(rnd() * 4)])), 0.012);
+        r.position.set(bx, yOf(bx, bz) - 0.01, bz);
+        r.scale.y = 0.6; r.rotation.set(rnd() * 3, rnd() * 3, 0);
+        g.add(r);
+      }
+    }
+  };
+  bank(riverPoly, 0.5, 0.8, 3, (x, z) => heightAt(x, z));
+  bank(creekPoly, 0.42, 0.56, 2, (x, z) => heightAt(x, z));
+  const reedGeo = new THREE.ConeGeometry(0.018, 0.42, 4); reedGeo.translate(0, 0.21, 0);
+  const reedMat = toon(0x6fae55), tipMat = toon(0x9a6a43);
+  const reeds = (x, z, n) => {
+    const y = heightAt(x, z);
+    for (let i = 0; i < n; i++) {
+      const r = new THREE.Mesh(reedGeo, reedMat);
+      r.position.set(x + (rnd() - 0.5) * 0.25, y - 0.02, z + (rnd() - 0.5) * 0.25);
+      r.rotation.set((rnd() - 0.5) * 0.35, 0, (rnd() - 0.5) * 0.35);
+      r.scale.y = 0.7 + rnd() * 0.6;
+      if (i % 2 === 0) { // 香蒲的小棒头
+        const tip = new THREE.Mesh(new THREE.CapsuleGeometry(0.026, 0.07, 2, 6), tipMat);
+        tip.position.y = 0.38; r.add(tip);
+      }
+      r.raycast = () => {};
+      g.add(r);
+    }
+  };
+  for (const [x, z, n] of [[-0.6, -2.55, 6], [-1.85, -2.35, 5], [-2.25, -3.05, 4], [-3.6, -1.65, 5], [-2.75, -1.45, 4], [-4.15, -1.05, 4]]) reeds(x, z, n);
+  const padMat = toon(0x6cc06a, { side: THREE.DoubleSide });
+  for (const [dx, dz, s, flower] of [[0.18, 0.12, 1, 1], [-0.22, 0.05, 0.8, 0], [0.02, -0.25, 0.9, 0]]) {
+    const pad = new THREE.Mesh(new THREE.CircleGeometry(0.12, 14, 0.3, Math.PI * 2 - 0.6), padMat);
+    pad.rotation.x = -Math.PI / 2; pad.rotation.z = dx * 9;
+    pad.position.set(POOL.x + dx, -0.095, POOL.z + dz);
+    pad.scale.setScalar(s);
+    pad.raycast = () => {};
+    g.add(pad);
+    if (flower) {
+      const f = new THREE.Group();
+      for (let k = 0; k < 6; k++) {
+        const pt = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), toon(0xffb7cf));
+        pt.scale.set(0.6, 0.5, 1.2);
+        const a = (k / 6) * Math.PI * 2;
+        pt.position.set(Math.cos(a) * 0.04, 0.02, Math.sin(a) * 0.04);
+        pt.rotation.y = -a;
+        f.add(pt);
+      }
+      const ctr = new THREE.Mesh(new THREE.SphereGeometry(0.022, 8, 6), toon(0xffe37a));
+      ctr.position.y = 0.04; f.add(ctr);
+      f.position.set(POOL.x + dx, -0.09, POOL.z + dz);
+      g.add(f);
+    }
+  }
+
   // 瀑布：从高台边上往前鼓出去再落进水潭，宽 0.75、高 1.6
-  const FW = 0.78, FH = UPPER_H + 0.1 + 0.11;
+  const FW = 0.6, FH = UPPER_H + 0.1 + 0.11;
   const fallGeo = new THREE.PlaneGeometry(FW, FH, 6, 14);
   { const p = fallGeo.attributes.position;
     for (let i = 0; i < p.count; i++) {
       const x = p.getX(i), y = p.getY(i), k = (FH / 2 - y) / FH; // 0 顶 .. 1 底
       p.setZ(i, 0.42 * Math.sin(Math.min(1, k * 1.25) * Math.PI * 0.5) + 0.05 * Math.sin(x * 9) * k);
       p.setY(i, UPPER_H - 0.06 - k * FH);
-      p.setX(i, x * (1 + 0.18 * k));
+      p.setX(i, x * (1 + 0.3 * k));
     } }
-  const fall = new THREE.Mesh(fallGeo, flow(1.6, 0.94, 0.16));
+  const fallMat = flow(1.6, 0.94, 0.16);
+  fallMat.fragmentShader = fallMat.fragmentShader.replace("gl_FragColor", "c = mix(c, vec3(1.0), smoothstep(0.9, 0.97, vUv.y) + smoothstep(0.12, 0.0, vUv.y) * 0.9);\n        gl_FragColor");
+  const fall = new THREE.Mesh(fallGeo, fallMat);
   // 朝向：沿河潭方向（从瀑布口指向水潭）
   const fdx = POOL.x - FALL_TOP.x, fdz = POOL.z - FALL_TOP.z;
   fall.position.set(FALL_TOP.x, 0, FALL_TOP.z);

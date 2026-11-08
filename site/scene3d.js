@@ -4,10 +4,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=6";
-import { buildDino } from "./dino3d.js?v=6";
-import { createDecor } from "./decor3d.js?v=6";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=6";
+import { buildPet, SPECIES } from "./pet3d.js?v=7";
+import { buildDino } from "./dino3d.js?v=7";
+import { createDecor } from "./decor3d.js?v=7";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=7";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -132,9 +132,11 @@ world.add(lamp);
 const flowers = new THREE.Group();
 const PETALS = [0xff8fab, 0xffd166, 0xc3a6ff, 0xff9e7a, 0x8fd3ff, 0xffffff];
 const flowerList = [];
+// 7 簇、每簇 3 朵，散在草地上（避开路、家和床），比排成一圈自然
+const FLOWER_CLUSTERS = [[-1.0, 2.2], [1.75, 1.75], [3.0, 0.2], [-2.95, -0.3], [-0.3, -1.55], [2.6, -1.6], [-2.05, 2.65]];
 for (let i = 0; i < 21; i++) {
-  const a = (i / 21) * Math.PI * 2 + 0.15;
-  const r = 2.62 + (i % 2) * 0.22;
+  const [cx, cz] = FLOWER_CLUSTERS[i % 7], k = Math.floor(i / 7);
+  const ang = k * 2.1 + i * 0.7, rr = 0.12 + k * 0.13;
   const f = new THREE.Group();
   const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.34, 5), toon(0x3f9a55));
   stem.position.y = 0.17;
@@ -154,7 +156,8 @@ for (let i = 0; i < 21; i++) {
   const bud = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), toon(0x5fae5f));
   bud.position.y = 0.36;
   f.add(stem, bloom, bud);
-  f.position.set(Math.cos(a) * r, 0, Math.sin(a) * r);
+  f.position.set(cx + Math.cos(ang) * rr, 0, cz + Math.sin(ang) * rr);
+  f.scale.setScalar(0.85 + ((i * 37) % 10) / 25);
   f.userData.phase = Math.random() * Math.PI * 2;
   flowers.add(f);
   flowerList.push({ f, bloom, bud, open: 0, target: 0 });
@@ -709,7 +712,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=6").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=7").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();

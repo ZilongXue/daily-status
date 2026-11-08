@@ -95,7 +95,7 @@ launchctl kickstart gui/$(id -u)/com.zilong.whoop-sync     # 手动跑一次，�
   - 事件类型 `mood`（只有她能发，每天第一次 +1 星）、`sleep`、`wake`、`act`。
   - `GET /events?who=` 会顺便记下在线状态，返回结果里带 `presence`。
   - `/wallet` 多返回三项：`fishbook`、`casts`、`fishRules`。
-- **缓存**：静态资源带 `?v=6`。改了前端以后要把这个版本号加一，不然 GitHub Pages 最多 10 分钟内可能返回旧文件。
+- **缓存**：静态资源带 `?v=7`。改了前端以后要把这个版本号加一，不然 GitHub Pages 最多 10 分钟内可能返回旧文件。
 
 ### 第四版地形（2026-11-08）
 - 主岛移到了 `site/island3d.js`，地形按设计好的轮廓生成，不再是在圆上加噪声：
