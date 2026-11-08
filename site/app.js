@@ -469,10 +469,6 @@ function demoData(kind) {
     days, streaks: { regular_sleep: { green: 5, yellow: 2, red: 0 }[band], slept_7h: 1, wear: 30 },
     bio: { hrv: { green: 68, yellow: 50, red: 34 }[band], rhr: { green: 56, yellow: 60, red: 67 }[band], hrv_avg7: 52, rhr_avg7: 60 },
   };
-  // 和导出端一致：活动（负荷 / 步数 / 运动）先不给看
-  for (const k of ["strain", "strain_band", "steps", "workouts"]) delete d.today[k];
-  for (const k of ["avg_strain", "workouts"]) delete d.week[k];
-  for (const x of d.days) { delete x.strain; delete x.steps; }
   return d;
 }
 

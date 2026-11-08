@@ -31,7 +31,8 @@ python3 -m http.server 8765 -d site        # 本地预览 http://localhost:8765/
 ## 页面上显示什么
 
 见 `~/Documents/health/whoop/export_status.py` 的 `FIELDS` 和 `build()`。改白名单就是改别人能看到的东西。
-暂时不给看的内容放在同一文件的 `HIDE` 里（目前藏着 `activity`：负荷、步数、运动记录），导出时就删掉，密文里也没有；页面发现没有这些字段会自动隐藏对应卡片。
+不想给看的运动类型放在同一文件的 `HIDE_SPORTS` 里（目前是 `activity`，也就是 WHOOP 自动识别、没标项目的"活动"），导出时就删掉，密文里也没有。
+页面对缺失的字段是容错的：没有负荷数据时"今日活动"卡片会自动隐藏。
 
 ## 安全边界（诚实版）
 
