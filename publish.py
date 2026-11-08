@@ -95,9 +95,13 @@ def encrypt(plaintext: bytes, pw: str) -> dict:
     return {"v": 1, "kdf": "PBKDF2-SHA256", "iter": ITERATIONS, "salt": b64(s), "iv": b64(iv), "ct": b64(ct)}
 
 
-def git(*args: str, env: dict | None = None) -> str:
-    return subprocess.run(["git", "-C", str(ROOT), *args], check=True, capture_output=True, text=True,
-                          env={**os.environ, **(env or {})}).stdout.strip()
+# launchd 里跑的时候，网络卡住会让 ssh 一直挂着：不许交互、连接 20 秒超时、每 15 秒心跳
+SSH = "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+
+
+def git(*args: str, env: dict | None = None, timeout: int = 60) -> str:
+    return subprocess.run(["git", "-C", str(ROOT), *args], check=True, capture_output=True, text=True, timeout=timeout,
+                          env={**os.environ, "GIT_SSH_COMMAND": SSH, **(env or {})}).stdout.strip()
 
 
 def deploy() -> None:
@@ -107,7 +111,13 @@ def deploy() -> None:
         git("--work-tree", str(SITE), "add", "-A", "--", ".", ":(exclude,glob)**/.DS_Store", env=env)
         tree = git("write-tree", env=env)
         commit = git("commit-tree", tree, "-m", "update", env=env)
-    git("push", "--force", "--quiet", "origin", f"{commit}:refs/heads/{BRANCH}")
+    for attempt in (1, 2):
+        try:
+            git("push", "--force", "--quiet", "origin", f"{commit}:refs/heads/{BRANCH}", timeout=120)
+            break
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError):
+            if attempt == 2:
+                raise
     print(f"已推送 -> {BRANCH} ({commit[:7]})")
 
 
