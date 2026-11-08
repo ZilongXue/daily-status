@@ -7,14 +7,11 @@
 <meta name="referrer" content="no-referrer">
 <title>小窝</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦖</text></svg>">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&family=Nunito:wght@600;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 <script type="importmap">
 { "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
 } }
 </script>
 </head>
@@ -139,7 +136,7 @@
 </main>
 
 <canvas id="fx" aria-hidden="true"></canvas>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/lottie-web/5.13.0/lottie_light.min.js"></script>
+<script src="vendor/lottie_light.min.js"></script>
 <script src="config.js"></script>
 <script src="app.js"></script>
 <script src="social.js"></script>

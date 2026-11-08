@@ -400,7 +400,7 @@ function emo(el, cp, fallback) {
   el.textContent = "";
   if (!window.lottie) { el.textContent = fallback; return; }
   const a = lottie.loadAnimation({ container: el, renderer: "svg", loop: true, autoplay: !REDUCED,
-    path: `https://fonts.gstatic.com/s/e/notoemoji/latest/${cp}/lottie.json` });
+    path: `vendor/noto/${cp}.json` }); // Noto Animated Emoji（CC BY 4.0），本地副本
   a.addEventListener("data_failed", () => { a.destroy(); anims.delete(el); el.textContent = fallback; });
   if (REDUCED) a.addEventListener("DOMLoaded", () => a.goToAndStop(0, true));
   anims.set(el, a);

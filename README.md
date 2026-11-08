@@ -45,8 +45,8 @@ python3 -m http.server 8765 -d site        # 本地预览 http://localhost:8765/
 
 - 3D 小岛（`site/scene3d.js`）和小伙伴（`site/pet3d.js`：猫猫 / 企鹅 / 小鸡）都是用 Three.js 基础几何体现搭的原创模型。
   水晶 = 恢复，花 = 今天的负荷（开花数 = strain），小床 = 昨晚睡眠，树 = 作息规律度。
-- 动态 emoji：Google Noto Animated Emoji（CC BY 4.0），直接引用 fonts.gstatic.com。署名放在 `site/index.html` 底部的注释里（页面上不显示文字）。
-- Three.js r170 / lottie-web 5.13.0 走 CDN（jsDelivr / cdnjs）。
+- 动态 emoji：Google Noto Animated Emoji（CC BY 4.0），本地副本在 `site/vendor/noto/`。署名放在 `site/index.html` 底部的注释里（页面上不显示文字）。
+- Three.js r170、lottie-web 5.13.0、标题字体（ZCOOL KuaiLe 子集，OFL）全部放在 `site/vendor/`：她在国内，Google Fonts / jsDelivr 打不开或不稳定，页面不能有任何外部请求。
 
 ## 每小时自动更新
 

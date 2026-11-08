@@ -207,7 +207,7 @@ function textSprite(text, color, size = 64) {
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d");
-  g.font = `800 ${size * 0.8}px Nunito, sans-serif`;
+  g.font = `800 ${size * 0.8}px ui-rounded, system-ui, sans-serif`;
   g.textAlign = "center"; g.textBaseline = "middle";
   g.lineWidth = size * 0.1; g.strokeStyle = "#ffffff"; g.strokeText(text, size / 2, size / 2);
   g.fillStyle = color; g.fillText(text, size / 2, size / 2);
