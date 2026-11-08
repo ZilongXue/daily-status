@@ -108,3 +108,13 @@ launchctl kickstart gui/$(id -u)/com.zilong.whoop-sync     # 手动跑一次，�
   - 低处：沙子和湿沙。
 - 草地平面仍然在 y = 0，角色和装饰都站在这一层。
 - 为了避开河道，帐篷挪到了右后方，路灯挪到了水潭旁边。
+
+## 本地测试环境（和线上完全隔离）
+```sh
+./dev.sh          # 启动本地后端（本地 SQLite 版 D1）+ 本地页面；第一次会自动建表并塞 100 颗测试星星
+./dev.sh reset    # 清空本地测试数据库重来
+```
+- 打开 `http://localhost:8765/?demo=green`：页面用演示数据（不用密码），所有互动走本地后端 `localhost:8787`，用测试密钥 `sha256("nest-dev")`。
+- 两个浏览器窗口分别选"我是她"和"我是 Zilong"，可以互相看到对方的动作（12 秒轮询）。
+- `worker/.dev.vars` 里的 ACCESS_HASH / SYS_HASH 只是测试值（系统令牌是 64 个 `a`）；线上密钥用 `wrangler secret` 设置，本地拿不到。
+- 想单独测接口：`curl -H "authorization: Bearer <测试令牌>" localhost:8787/wallet`。测试令牌 = sha256(sha256("nest-dev") 的原始字节 + "nest-api-v1")。
