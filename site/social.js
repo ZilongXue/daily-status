@@ -117,10 +117,12 @@
 
   /* ------------------------------------------------------------ rendering */
   const root = $("#social");
-  const other = () => (me === "her" ? "他" : "她");
-  const whoName = (w) => (w === me ? "我" : w === "me" ? "他" : "她");
+  // 她的名字在加密数据里（publish.py 从 state/profile.json 加进去），代码里不出现
+  const HER = () => (window.NEST && window.NEST.data && window.NEST.data.names && window.NEST.data.names.her) || "她";
+  const whoName = (w) => (w === me ? "我" : w === "me" ? "他" : HER());
 
   function render() {
+    $('[data-who="her"]').textContent = `我是${HER()} 💕`;
     if (!me) { root.hidden = false; $("#who-pick").hidden = false; $("#social-main").hidden = true; return; }
     root.hidden = false; $("#who-pick").hidden = true; $("#social-main").hidden = false;
     const s = state();
@@ -132,7 +134,7 @@
     $("#anger").hidden = !s.angry;
     if (s.angry) {
       $("#anger-fill").style.width = s.anger + "%";
-      $("#anger-text").textContent = me === "her" ? `气还剩 ${s.anger}% · 已经揍了 ${s.hits} 下` : `她在生气！已经揍了你 ${s.hits} 下，气还剩 ${s.anger}%`;
+      $("#anger-text").textContent = me === "her" ? `气还剩 ${s.anger}% · 已经揍了 ${s.hits} 下` : `${HER()}在生气！已经揍了你 ${s.hits} 下，气还剩 ${s.anger}%`;
     }
     // 饱腹
     $("#full-fill").style.width = s.full + "%";
@@ -173,7 +175,7 @@
       else if (e.kind === "note") t = `${w}留言：「${await open(e.box || "")}」`;
       return `<li class="${e.who === me ? "mine" : ""}"><span>${esc(t)}</span><time>${ago(new Date(e.ts).toISOString())}</time></li>`;
     }));
-    $("#timeline").innerHTML = lines.join("") || `<li class="muted">还没有互动，${me === "her" ? "先喂它点好吃的吧" : "等她来玩"} ✨</li>`;
+    $("#timeline").innerHTML = lines.join("") || `<li class="muted">还没有互动，${me === "her" ? "先喂它点好吃的吧" : `等${HER()}来玩`} ✨</li>`;
   }
   const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -181,10 +183,10 @@
   async function onRemote(e) {
     if (e.who === me) return;
     const R = window.NEST3D;
-    if (e.kind === "feed") { R && R.react("eat"); say(`她喂了你${(FOODS[e.item] || {}).name || "好吃的"} ${(FOODS[e.item] || {}).emoji || ""}`); }
-    else if (e.kind === "angry") { say("⚠️ 她生气了！快认错！"); }
-    else if (e.kind === "hit") { R && R.react("hit"); say(`她用${(WEAPONS[e.item] || WEAPONS.fist).name}揍了你 ${e.n || 1} 下 😵`); }
-    else if (e.kind === "calm") { R && R.react("love"); say("她气消了 🌈"); }
+    if (e.kind === "feed") { R && R.react("eat"); say(`${HER()}喂了你${(FOODS[e.item] || {}).name || "好吃的"} ${(FOODS[e.item] || {}).emoji || ""}`); }
+    else if (e.kind === "angry") { say(`⚠️ ${HER()}生气了！快认错！`); }
+    else if (e.kind === "hit") { R && R.react("hit"); say(`${HER()}用${(WEAPONS[e.item] || WEAPONS.fist).name}揍了你 ${e.n || 1} 下 😵`); }
+    else if (e.kind === "calm") { R && R.react("love"); say(`${HER()}气消了 🌈`); }
     else if (e.kind === "sorry") { R && R.react("bow"); say("他认错了：对不起 🙇"); }
     else if (e.kind === "flower") { R && R.react("love"); say("他送了你一朵花 🌹"); burst(); }
     else if (e.kind === "note") { say(`${whoName(e.who)}的纸条：「${await open(e.box || "")}」`); }
@@ -334,6 +336,7 @@
       await idbSet("token", await getToken());
       await idbSet("key", b64e(await crypto.subtle.exportKey("raw", await key())));
       await idbSet("lastId", lastId);
+      await idbSet("herName", HER());
       const r = await fetch(API + "/subscribe", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: "me", sub: sub.toJSON() }) });
       if (!r.ok) throw new Error("subscribe " + r.status);
       pushState = "on"; render();
@@ -354,7 +357,7 @@
   async function start() {
     if (started || !(await key())) return;
     started = true;
-    if (me === "me") await checkPush();
+    if (me === "me") { await checkPush(); if (pushState === "on") idbSet("herName", HER()).catch(() => {}); }
     render();
     await poll(true);
     setInterval(() => { if (!document.hidden) poll(); }, 12000);

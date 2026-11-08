@@ -24,26 +24,27 @@ async function openNote(box, rawKey) {
   } catch { return null; }
 }
 
-async function line(e, rawKey) {
-  if (e.kind === "feed") return `她喂了你${FOODS[e.item] || "好吃的"}`;
-  if (e.kind === "angry") return "⚠️ 她生气了！快去小窝哄哄她";
-  if (e.kind === "hit") return `她用${WEAPONS[e.item] || "小拳拳 👊"}揍了你 ${e.n || 1} 下 😵`;
-  if (e.kind === "calm") return "她气消了 🌈";
-  if (e.kind === "note") { const t = rawKey && e.box ? await openNote(e.box, rawKey) : null; return t ? `她的纸条：「${t}」` : "她给你留了一张纸条 💌"; }
+async function line(e, rawKey, n) {
+  if (e.kind === "feed") return `${n}喂了你${FOODS[e.item] || "好吃的"}`;
+  if (e.kind === "angry") return `⚠️ ${n}生气了！快去小窝哄哄她`;
+  if (e.kind === "hit") return `${n}用${WEAPONS[e.item] || "小拳拳 👊"}揍了你 ${e.n || 1} 下 😵`;
+  if (e.kind === "calm") return `${n}气消了 🌈`;
+  if (e.kind === "note") { const t = rawKey && e.box ? await openNote(e.box, rawKey) : null; return t ? `${n}的纸条：「${t}」` : `${n}给你留了一张纸条 💌`; }
   return null;
 }
 
 async function onPush() {
   let title = "小窝", body = "推送已开启 🎉 她在小窝里有动作时会通知你";
   try {
-    const [token, rawKey, last] = await Promise.all([get("token"), get("key"), get("lastId")]);
+    const [token, rawKey, last, herName] = await Promise.all([get("token"), get("key"), get("lastId"), get("herName")]);
+    const n = herName || "她";
     const r = await fetch(`${API}/events?since=${last || 0}`, { headers: { authorization: "Bearer " + token } });
     const { events = [] } = await r.json();
     if (events.length) await set("lastId", events[events.length - 1].id);
-    const lines = (await Promise.all(events.filter((e) => e.who === "her").map((e) => line(e, rawKey)))).filter(Boolean);
+    const lines = (await Promise.all(events.filter((e) => e.who === "her").map((e) => line(e, rawKey, n)))).filter(Boolean);
     if (lines.length) {
       const angry = lines.some((l) => l.startsWith("⚠️"));
-      title = angry ? "小窝 · 她生气了 😤" : "小窝";
+      title = angry ? `小窝 · ${n}生气了 😤` : "小窝";
       body = lines.slice(-4).join("\n");
     }
   } catch {

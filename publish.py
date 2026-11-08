@@ -124,7 +124,12 @@ def main() -> int:
         print(api_hash(password()))
         return 0
     subprocess.run([sys.executable, str(EXPORT), "--out", str(STATUS)], check=True)
-    blob = encrypt(STATUS.read_bytes(), password())
+    # 称呼（比如她的名字）放在加密数据里，不写进公开的代码：state/profile.json，例如 {"her": "..."}
+    data = json.loads(STATUS.read_text())
+    profile = STATE / "profile.json"
+    if profile.exists():
+        data["names"] = json.loads(profile.read_text())
+    blob = encrypt(json.dumps(data, ensure_ascii=False).encode(), password())
     tmp = ENC.with_suffix(".tmp")
     tmp.write_text(json.dumps(blob))
     tmp.replace(ENC)
