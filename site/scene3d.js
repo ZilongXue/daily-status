@@ -6,6 +6,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 import { buildPet, SPECIES } from "./pet3d.js";
 import { buildDino } from "./dino3d.js";
+import { createDecor } from "./decor3d.js";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -242,8 +243,10 @@ function hisHour(d) {
   const t = new Date(Date.now() + off * 60000);
   return t.getUTCHours() + t.getUTCMinutes() / 60;
 }
+let skyKind = "day";
 function applySky(h) {
   const k = h >= 5 && h < 7.5 ? "dawn" : h >= 7.5 && h < 17 ? "day" : h >= 17 && h < 19.5 ? "dusk" : "night";
+  skyKind = k;
   const s = SKY[k];
   hemi.color.setHex(s.hemi[0]); hemi.groundColor.setHex(s.hemi[1]); hemi.intensity = s.hemi[2];
   sun.color.setHex(s.sun[0]); sun.intensity = s.sun[1];
@@ -279,6 +282,8 @@ function setSpecies(k) {
   document.querySelectorAll("[data-species]").forEach((b) => b.classList.toggle("on", b.dataset.species === kind));
   dispatchEvent(new CustomEvent("nest:species", { detail: { kind } }));
 }
+
+const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet });
 
 /* ---------------------------------------------------------------- state from data */
 const BAND_HEX = { green: 0x3fbf7f, yellow: 0xf4b33a, red: 0xef5d5d };
@@ -401,7 +406,7 @@ renderer.domElement.addEventListener("pointerup", (e) => {
     dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "pet", react: react.kind, x: h.x, y: h.y } }));
     return;
   }
-  dispatchEvent(new CustomEvent("nest:tap", { detail: { what, x: e.clientX, y: e.clientY } }));
+  dispatchEvent(new CustomEvent("nest:tap", { detail: { what, item: hit.object.userData.item, x: e.clientX, y: e.clientY } }));
 });
 
 /* ---------------------------------------------------------------- loop */
@@ -427,6 +432,7 @@ const lerp = (a, b, k) => a + (b - a) * k;
 const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 
 function animate(t, dt) {
+  decor.update(t, dt, skyKind === "night" || skyKind === "dusk");
   if (!pet) return;
   const P = pet, sleep = mood === "sleep";
   const since = t - react.t0;
@@ -642,6 +648,10 @@ window.NEST3D = {
   setAngry(on) { angry = !!on; if (pet && pet.bandage) pet.bandage.visible = angry; },
   setFlowers(n) { vase.visible = n > 0; roses.forEach((r, i) => { r.visible = i < n; }); },
   headScreen() { return pet ? screenOf(headWorld()) : null; },
+  setDecor: (list) => decor.setDecor(list),
+  setSnow: (on) => decor.setSnow(on),
+  setLevel: (n) => decor.setLevel(n),
+  hasDecor: (id) => decor.has(id),
 };
 
 /* ---------------------------------------------------------------- boot */
@@ -651,4 +661,5 @@ resize();
 requestAnimationFrame(loop);
 sceneEl.classList.add("has3d");
 sceneEl.classList.remove("loading3d");
+decor.loadCatalog().finally(() => dispatchEvent(new Event("nest:3dready")));
 setTimeout(() => document.getElementById("hint")?.classList.add("gone"), 9000);

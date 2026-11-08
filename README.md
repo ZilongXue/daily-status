@@ -60,3 +60,12 @@ launchctl kickstart gui/$(id -u)/com.zilong.whoop-sync     # 手动跑一次，�
 ```
 
 网址：https://zilongxue.github.io/daily-status/
+
+## 星星和小岛商店（2026-11-08）
+
+- 星星是两个人共用的金库，只用来装扮小岛。余额、购买、摆放都由后端（`worker/`）核算，网页改不了价格也刷不了星星。
+- 手环规则在 `stars.py`（每小时跟在 publish 后面跑，用 `state/sys_token` 调 `/mint`，每条规则每天只发一次）：
+  按时睡（`state/profile.json` 的 `bedtime`）+3、睡够 7 小时 +2、恢复绿 +1、作息规律 +1、负荷 ≥ 10 +1、连续 3 晚按时睡 +5、她催睡后 30 分钟内睡着 +3、开张礼包 +10。
+- 互动规则在 Worker：每天第一次喂食 +1、同一天互相留言 +1、和好 +1。
+- 装饰：`site/decor3d.js`（固定摆位、下雪、等级饰品），模型在 `site/vendor/decor/`（CC0 / CC-BY 3.0，署名见 `CREDITS.md`）。
+- 等级按累计星星：20 / 50 / 100 / 200 颗分别升到 Lv.2–5（头上的小花、围巾、皇冠）。

@@ -1,0 +1,200 @@
+[
+ {
+  "id": "swing",
+  "name_zh": "秋千",
+  "file": "swing.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC-BY 3.0",
+  "author": "Poly by Google",
+  "source_url": "https://poly.pizza/m/e-IJdcqZH4p"
+ },
+ {
+  "id": "lights",
+  "name_zh": "串灯",
+  "file": "lights.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/holiday-kit ; https://kenney.nl/assets/fantasy-town-kit"
+ },
+ {
+  "id": "cabin",
+  "name_zh": "小木屋",
+  "file": "cabin.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC-BY 3.0",
+  "author": "Jarlan Perez",
+  "source_url": "https://poly.pizza/m/et0OmFeZVkb"
+ },
+ {
+  "id": "pond",
+  "name_zh": "小池塘",
+  "file": "pond.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC-BY 3.0 + CC0 1.0",
+  "author": "Poly by Google + Isa Lousberg",
+  "source_url": "https://poly.pizza/m/5rf3YuZfJAW ; https://poly.pizza/m/gt2eYOyOvU"
+ },
+ {
+  "id": "sakura",
+  "name_zh": "樱花树",
+  "file": "sakura.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC-BY 3.0",
+  "author": "konta johanna",
+  "source_url": "https://poly.pizza/m/bk19zLgwVAW"
+ },
+ {
+  "id": "telescope",
+  "name_zh": "望远镜",
+  "file": "telescope.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "CreativeTrio",
+  "source_url": "https://poly.pizza/m/RjyTCQvA8b"
+ },
+ {
+  "id": "campfire",
+  "name_zh": "篝火",
+  "file": "campfire.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/nature-kit ; https://kenney.nl/assets/survival-kit"
+ },
+ {
+  "id": "windmill",
+  "name_zh": "风车",
+  "file": "windmill.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Quaternius",
+  "source_url": "https://poly.pizza/m/WUbU1Nct2W"
+ },
+ {
+  "id": "snowman",
+  "name_zh": "雪人",
+  "file": "snowman.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/holiday-kit"
+ },
+ {
+  "id": "tent",
+  "name_zh": "帐篷",
+  "file": "tent.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/nature-kit"
+ },
+ {
+  "id": "mailbox",
+  "name_zh": "邮筒",
+  "file": "mailbox.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Isa Lousberg",
+  "source_url": "https://poly.pizza/m/FCuds5nBko"
+ },
+ {
+  "id": "bench",
+  "name_zh": "长椅",
+  "file": "bench.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/holiday-kit"
+ },
+ {
+  "id": "mushrooms",
+  "name_zh": "蘑菇",
+  "file": "mushrooms.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/nature-kit"
+ },
+ {
+  "id": "balloon",
+  "name_zh": "热气球",
+  "file": "balloon.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC-BY 3.0",
+  "author": "Poly by Google",
+  "source_url": "https://poly.pizza/m/7eSQwXI898e"
+ },
+ {
+  "id": "gifts",
+  "name_zh": "礼物堆",
+  "file": "gifts.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/holiday-kit"
+ },
+ {
+  "id": "lamppost",
+  "name_zh": "路灯",
+  "file": "lamppost.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Isa Lousberg",
+  "source_url": "https://poly.pizza/m/Zp1b44poac"
+ },
+ {
+  "id": "fence",
+  "name_zh": "小栅栏",
+  "file": "fence.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC0 1.0",
+  "author": "Kenney (kenney.nl)",
+  "source_url": "https://kenney.nl/assets/nature-kit"
+ },
+ {
+  "id": "flowers_bed",
+  "name_zh": "花坛",
+  "file": "flowers_bed.glb",
+  "scale": 1,
+  "y": 0,
+  "rotY": 0,
+  "license": "CC-BY 3.0 + CC0 1.0",
+  "author": "Zsky + Kenney (kenney.nl)",
+  "source_url": "https://poly.pizza/m/eUCvK3Oq9z ; https://kenney.nl/assets/nature-kit"
+ }
+]

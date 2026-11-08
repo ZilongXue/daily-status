@@ -2,7 +2,7 @@
 CREATE TABLE IF NOT EXISTS events (
   id   INTEGER PRIMARY KEY AUTOINCREMENT,
   ts   INTEGER NOT NULL,                              -- 毫秒时间戳（服务器时间）
-  who  TEXT    NOT NULL CHECK (who IN ('me', 'her')), -- me = Zilong，her = 她
+  who  TEXT    NOT NULL CHECK (who IN ('me', 'her', 'sys')), -- me = Zilong，her = 她，sys = 按数据发的星星
   kind TEXT    NOT NULL,                              -- feed / angry / hit / calm / sorry / flower / note
   item TEXT,                                          -- 食物或礼物的 id（明文，只用于推送文案）
   n    INTEGER,                                       -- 揍了几下等

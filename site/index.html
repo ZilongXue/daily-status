@@ -76,6 +76,17 @@
         <p class="small" id="anger-text"></p>
       </div>
       <div class="full"><span class="small muted">饱腹</span><div class="meter green"><i id="full-fill"></i></div><span class="small" id="full-text"></span></div>
+      <div class="wallet" id="wallet">
+        <div class="wallet-head">
+          <b class="stars">⭐ <span id="stars">0</span></b>
+          <span class="level" id="level"></span>
+          <span class="spacer"></span>
+          <button type="button" data-act="earn" class="mini">怎么赚星星</button>
+          <button type="button" data-act="shop">🛍 商店</button>
+        </div>
+        <div class="earn small" id="earn" hidden></div>
+        <div class="shop" id="shop" hidden></div>
+      </div>
       <div class="actions" id="actions"></div>
       <div class="tray" id="tray" hidden></div>
       <form class="note" id="note-form" hidden>
@@ -129,7 +140,7 @@
 
 
   <!-- Credits: animated emoji = Google Noto Animated Emoji (CC BY 4.0, https://googlefonts.github.io/noto-emoji-animation/).
-       Island and pets are original Three.js models. Data: the owner's wearable via the WHOOP API (unofficial). -->
+       Island and pets are original Three.js models. Island decorations: CC0 / CC-BY 3.0 models, full attribution in vendor/decor/CREDITS.md. Data: the owner's wearable via the WHOOP API (unofficial). -->
   <footer class="foot small muted">
     <p><a href="#" id="logout">退出这台设备</a></p>
   </footer>

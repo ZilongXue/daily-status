@@ -29,6 +29,8 @@ async function line(e, rawKey, n) {
   if (e.kind === "angry") return `⚠️ ${n}生气了！快去小窝哄哄她`;
   if (e.kind === "hit") return `${n}用${WEAPONS[e.item] || "小拳拳 👊"}揍了你 ${e.n || 1} 下 😵`;
   if (e.kind === "calm") return `${n}气消了 🌈`;
+  if (e.kind === "nudge") return `🌙 ${n}催你睡觉啦！30 分钟内睡着，小岛就能拿 3 颗星星`;
+  if (e.kind === "buy") return `${n}用星星给小岛买了新装饰 🎁`;
   if (e.kind === "note") { const t = rawKey && e.box ? await openNote(e.box, rawKey) : null; return t ? `${n}的纸条：「${t}」` : `${n}给你留了一张纸条 💌`; }
   return null;
 }
