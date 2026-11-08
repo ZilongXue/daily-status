@@ -50,3 +50,12 @@ python3 -m http.server 8765 -d site        # 本地预览 http://localhost:8765/
 ## 每小时自动更新
 
 `hourly.sh` 由 `~/Library/LaunchAgents/com.zilong.whoop-sync.plist` 每小时调用：先 `whoop.py sync`，成功后 `publish.py`。
+
+launchd 起的 `/bin/sh` 读不了 `~/Documents`，所以实际跑的是装到外面的一份副本；改了 `hourly.sh` 要重新装：
+
+```bash
+install -m 755 hourly.sh ~/Library/Scripts/whoop-status-hourly.sh
+launchctl kickstart gui/$(id -u)/com.zilong.whoop-sync     # 手动跑一次，日志在 ~/Library/Logs/whoop-sync.log
+```
+
+网址：https://zilongxue.github.io/daily-status/
