@@ -1,6 +1,8 @@
 name = "nest-api"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
+workers_dev = false   # workers.dev 在国内被墙，只走自定义域名
+routes = [{ pattern = "api.hizilo.com", custom_domain = true }]
 
 [vars]
 ALLOWED_ORIGINS = "https://zilongxue.github.io,http://localhost:8765"
