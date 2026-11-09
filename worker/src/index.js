@@ -30,8 +30,9 @@
 //      每个连接每秒最多约 20 条、每条最多 512 字节，多的直接丢掉。GET /events 的返回带 rt: true 表示有这个通道。
 
 import { DurableObject } from "cloudflare:workers";
+import { gamesGet, gamesPost, checkWishEvent, luckyFish } from "./games.js";
 
-const KINDS = new Set(["feed", "angry", "hit", "calm", "sorry", "flower", "note", "nudge", "buy", "place", "mood", "sleep", "wake", "act", "answer", "night", "tuck", "wear", "move"]);
+const KINDS = new Set(["feed", "angry", "hit", "calm", "sorry", "flower", "note", "nudge", "buy", "place", "mood", "sleep", "wake", "act", "answer", "night", "tuck", "wear", "move", "wish", "wishdone"]);
 const MOODS = new Set(["happy", "tired", "miss", "angry", "sleepy"]);
 const ACTS = new Set(["hug", "pat", "highfive", "poke", "ride", "kiss"]);
 // 钓鱼奖池：[id, 稀有度, 权重, 星星]。chest 的星星是 5–10 随机。第一次钓到某样东西再 +1。
@@ -106,7 +107,7 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const url = new URL(req.url);
     if (url.pathname === "/rt") return roomConnect(req, env);
-    if (!["/events", "/push-test", "/subscribe", "/wallet", "/mint", "/fish", "/gacha", "/farm", "/qa", "/world"].includes(url.pathname)) return json({ error: "not found" }, 404, cors);
+    if (!["/events", "/push-test", "/subscribe", "/wallet", "/mint", "/fish", "/gacha", "/farm", "/qa", "/world", "/games"].includes(url.pathname)) return json({ error: "not found" }, 404, cors);
     if (url.pathname === "/mint") {
       if (req.method !== "POST" || !(await sysAuthorized(req, env))) return json({ error: "unauthorized" }, 401, cors);
       let b;
@@ -119,6 +120,24 @@ export default {
     if (url.pathname === "/wallet" && req.method === "GET") return json(await wallet(env), 200, cors);
     if (url.pathname === "/qa" && req.method === "GET") return json(await qa(env), 200, cors);
     if (url.pathname === "/world" && req.method === "GET") return json(await world(env, ctx), 200, cors);
+    if (url.pathname === "/games") {
+      const deps = { mint, bjDay, POOL };
+      if (req.method === "GET") {
+        const who = url.searchParams.get("who");
+        if (who !== "me" && who !== "her") return json({ error: "bad who" }, 400, cors);
+        return json(await gamesGet(env, who, deps), 200, cors);
+      }
+      if (req.method !== "POST") return json({ error: "method not allowed" }, 405, cors);
+      let b;
+      try { b = await req.json(); } catch { return json({ error: "bad json" }, 400, cors); }
+      if (!b || (b.who !== "me" && b.who !== "her") || typeof b.op !== "string") return json({ error: "bad body" }, 400, cors);
+      const r = await gamesPost(env, b, deps);
+      if (r.error) return json(r, r.status || 400, cors);
+      if (r.push) ctx.waitUntil(push(env, { who: b.who, kind: r.push.kind, item: r.push.item }).catch(() => {}));
+      delete r.push;
+      if (r.eid || r.result) ctx.waitUntil(notifyRoom(env, { who: b.who, kind: "game", id: r.eid ?? null }));
+      return json(r, 201, cors);
+    }
     if ((url.pathname === "/gacha" || url.pathname === "/farm") && req.method === "POST") {
       let b;
       try { b = await req.json(); } catch { return json({ error: "bad json" }, 400, cors); }
@@ -188,6 +207,10 @@ export default {
         const dup = await env.DB.prepare("SELECT 1 FROM events WHERE kind = 'answer' AND who = ? AND item = ?").bind(e.who, e.item).first();
         if (dup) return json({ error: "already answered" }, 409, cors);
       }
+      if (e.kind === "wish" || e.kind === "wishdone") {
+        const werr = await checkWishEvent(env, e);
+        if (werr) return json({ error: werr }, 409, cors);
+      }
       if (e.kind === "tuck") { // 给对方盖被子：对方 12 小时内说过晚安，而且我还没盖过
         const other = e.who === "me" ? "her" : "me";
         const night = await env.DB.prepare("SELECT id FROM events WHERE who = ? AND kind IN ('night', 'sleep') AND ts > ? ORDER BY id DESC LIMIT 1").bind(other, Date.now() - 12 * 3600000).first();
@@ -220,6 +243,8 @@ function validate(e) {
   if (e.kind === "mood" && (e.who !== "her" || !MOODS.has(e.item))) return "bad mood";
   if ((e.kind === "sleep" || e.kind === "wake") && e.who !== "her") return "bad sleep";
   if (e.kind === "act" && !ACTS.has(e.item)) return "bad act";
+  if ((e.kind === "wish" || e.kind === "wishdone") && !/^\d{1,12}$/.test(e.item || "")) return "bad wish";
+  if (e.kind === "wish" && !e.box) return "bad wish";
   if (e.item != null && (typeof e.item !== "string" || e.item.length > 24)) return "bad item";
   if (e.n != null && !(Number.isInteger(e.n) && e.n >= 0 && e.n <= 500)) return "bad n";
   if (e.box != null && (typeof e.box !== "string" || e.box.length > MAX_BOX || !/^[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/.test(e.box))) return "bad box";
@@ -272,7 +297,7 @@ async function wallet(env) {
   const shown = {};
   for (const b of buys) shown[b.item] = 1;
   for (const p of places) shown[p.item] = p.n;
-  const { results: book } = await env.DB.prepare("SELECT item, COUNT(*) AS c FROM events WHERE kind = 'fish' GROUP BY item").all();
+  const { results: book } = await env.DB.prepare("SELECT item, COUNT(*) AS c FROM events WHERE kind IN ('fish', 'dfish') AND item != 'miss' GROUP BY item").all();
   const dayStart = Date.parse(bjDay() + "T00:00:00+08:00");
   const { results: today } = await env.DB.prepare("SELECT who, COUNT(*) AS c FROM events WHERE kind = 'fish' AND ts >= ? GROUP BY who").bind(dayStart).all();
   const casts = { me: 0, her: 0 };
@@ -322,6 +347,8 @@ async function fish(env, who, pay) {
   const fid = r.meta.last_row_id;
   let stars = base < 0 ? 5 + (crypto.getRandomValues(new Uint8Array(1))[0] % 6) : base;
   if (first) stars += 1;
+  const lucky = id === luckyFish(bjDay());
+  if (lucky) stars += 2; // 今日幸运鱼
   if (stars > 0) await mint(env, `fish:${fid}`, stars);
   let note = null;
   if (id === "bottle") { // 漂流瓶：随机捞一张对方写过的纸条
@@ -329,7 +356,7 @@ async function fish(env, who, pay) {
     const n = await env.DB.prepare("SELECT ts, box FROM events WHERE kind = 'note' AND who = ? AND box IS NOT NULL ORDER BY RANDOM() LIMIT 1").bind(other).first();
     if (n) note = { ts: n.ts, box: n.box };
   }
-  return { id: fid, ts, catch: id, rarity, stars, first, cost, pity, note, used: c + 1, free: FREE_CASTS, max: MAX_CASTS };
+  return { id: fid, ts, catch: id, rarity, stars, first, lucky, cost, pity, note, used: c + 1, free: FREE_CASTS, max: MAX_CASTS };
 }
 
 // ---------------------------------------------------------------- 扭蛋
@@ -514,7 +541,7 @@ function json(body, status, headers) {
 // 只推她那边的动作；揍人类的高频动作做节流。推送不带任何内容（payload 为空），
 // 通知文字由手机上的 service worker 自己拉 /events 生成，推送服务（FCM）看不到内容。
 async function push(env, e) {
-  if (e.who !== "her" || !["feed", "angry", "hit", "calm", "note", "nudge", "buy", "mood", "sleep", "wake", "act", "fish", "answer", "tuck", "gacha"].includes(e.kind)) return;
+  if (e.who !== "her" || !["feed", "angry", "hit", "calm", "note", "nudge", "buy", "mood", "sleep", "wake", "act", "fish", "answer", "tuck", "gacha", "hunt", "derby", "quiz", "wish", "wishdone"].includes(e.kind)) return;
   if (e.kind === "fish" && RARITY[e.item] === "common") return; // 钓到普通的不打扰你
   if (e.kind === "gacha" && GACHA_RARITY[e.item] !== "epic") return;
   if (e.kind === "hit") {

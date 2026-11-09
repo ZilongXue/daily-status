@@ -1,8 +1,8 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=11";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=11";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=12";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=12";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
@@ -93,7 +93,7 @@ export function createCast(ctx) {
   let wanderAt = 3, manualUntil = 0;
   // 她自己点草地（或者实时同步过来）让小猫走过去；之后 20 秒内不自己乱逛
   function walkHer(p) {
-    if (F.state !== "idle" && F.fisher === "her") return;
+    if (busyFishing("her")) return;
     if (S.busy) return;
     if (S.riding) seatKitten(false);
     her.face = null;
@@ -292,116 +292,217 @@ export function createCast(ctx) {
     return enqueue(() => fn(item));
   }
 
-  /* ------------------------------------------------------------ 钓鱼 */
-  const rod = buildRod({ toon, outlined });
-  const bob = buildBobber({ toon, outlined });
-  rod.root.visible = false;
-  bob.root.visible = false;
-  world.add(bob.root);
-  const lineGeo = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 12 }, () => new THREE.Vector3()));
-  const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
-  line.visible = false;
-  line.frustumCulled = false;
-  world.add(line);
-  const glow = new THREE.PointLight(0xffffff, 0, 3.5, 1.5);
-  world.add(glow);
-  const beamMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
-  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 3.2, 20, 1, true), beamMat);
-  beam.visible = false;
-  world.add(beam);
+  /* ------------------------------------------------------------ 钓鱼（两个"钓位"：恐龙一个、小猫一个，钓鱼大赛时可以一起钓） */
   const ROD_REST = 1.0;
-  const F = { state: "idle", fisher: null, bobT: 0, caught: null, pull: null };
-  let bobFrom = new THREE.Vector3(), bobTo = DOCK.bobber.clone();
+  const PERP = new THREE.Vector3(DOCK.dir.z, 0, -DOCK.dir.x); // 码头的横向
+  function makeSlot(actor, side) {
+    const rod = buildRod({ toon, outlined });
+    const bob = buildBobber({ toon, outlined });
+    rod.root.visible = false;
+    bob.root.visible = false;
+    world.add(bob.root);
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 12 }, () => new THREE.Vector3()));
+    const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+    line.visible = false;
+    line.frustumCulled = false;
+    world.add(line);
+    const glow = new THREE.PointLight(0xffffff, 0, 3.5, 1.5);
+    world.add(glow);
+    const beamMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 3.2, 20, 1, true), beamMat);
+    beam.visible = false;
+    world.add(beam);
+    return {
+      actor, rod, bob, line, lineGeo, glow, beam, beamMat,
+      state: "idle", caught: null, pull: null, atDock: false, local: false,
+      // 码头只有 0.62 宽：两个人一前一后站（恐龙在最前面，小猫往回半步），各自偏一点
+      stand: DOCK.tip.clone().addScaledVector(PERP, side * 0.17).addScaledVector(DOCK.dir, side > 0 ? 0 : -0.6),
+      bobFrom: new THREE.Vector3(), bobTo: DOCK.bobber.clone().addScaledVector(PERP, side * 0.95),
+    };
+  }
+  const SLOTS = { me: makeSlot("me", 1), her: makeSlot("her", -1) };
+  const slotList = Object.values(SLOTS);
+  const busyFishing = (actor) => SLOTS[actor].state !== "idle";
 
-  function holdRod(who) {
+  function holdRod(sl) {
+    const who = sl.actor;
     const parts = who === "her" ? kitten : dino.parts();
     const arm = parts.arms[1];
-    arm.add(rod.root);
-    rod.root.position.set(0.02, -0.18, 0.1);
-    rod.root.rotation.set(ROD_REST, 0, 0);
-    rod.root.scale.setScalar(1 / (who === "her" ? KITTEN_SCALE : dino.scale()) * 0.95);
-    rod.root.visible = true;
+    arm.add(sl.rod.root);
+    sl.rod.root.position.set(0.02, -0.18, 0.1);
+    sl.rod.root.rotation.set(ROD_REST, 0, 0);
+    sl.rod.root.scale.setScalar(1 / (who === "her" ? KITTEN_SCALE : dino.scale()) * 0.95);
+    sl.rod.root.visible = true;
   }
-  function dropRod() { rod.root.removeFromParent(); rod.root.visible = false; }
+  function dropRod(sl) { sl.rod.root.removeFromParent(); sl.rod.root.visible = false; }
 
-  // 返回 { reel() }：鱼咬钩以后调用 reel(result) 拉上来
-  async function fish(whoReal, request) {
-    if (F.state !== "idle") return null;
-    // 他在床上睡着时，换小猫替他去钓
-    const who = whoReal === "me" && dino.sleeping() ? "her" : whoReal;
-    F.state = "walking";
-    F.fisher = who;
+  // 普通钓鱼：request() 一开始就发，返回最终结果 { catch, rarity, ... }。
+  // 比赛（opts.derby）：浮漂落水时才调 request()，它返回 { bite: 毫秒, reel(react|null) → Promise<结果> }；
+  //   咬钩后等玩家点"拉"，把反应时间交给 reel()，服务器这时才抽鱼。结果里 catch 为 null 表示鱼跑了。
+  //   opts.stay：钓完留在码头（比赛连着钓）。opts.local：是不是本机玩家自己在钓（决定要不要冒"快拉"按钮）。
+  async function fish(whoReal, request, opts = {}) {
+    // 他在床上睡着时，换小猫替他去钓（比赛时不换）
+    const who = whoReal === "me" && dino.sleeping() && !opts.derby ? "her" : whoReal;
+    const sl = SLOTS[who];
+    if (sl.state !== "idle") return null;
+    sl.state = "walking";
+    sl.local = opts.local !== false;
     if (who === "her" && S.riding) seatKitten(false);
     const go = (p) => (who === "her" ? move(her, p, 2.4) : dino.go(p));
-    const faceSea = () => DOCK.tip.clone().add(DOCK.dir);
+    const faceSea = () => sl.stand.clone().add(DOCK.dir);
     if (who === "her") her.face = null; else dino.face(null);
-    // 先发请求（结果在服务器抽），同时走去码头
-    const res = request();
-    await go(DOCK.base);
-    await go(DOCK.tip);
+    const res = opts.derby ? null : request();
+    if (!sl.atDock) { await go(DOCK.base); await go(sl.stand); sl.atDock = true; }
     if (who === "her") her.face = faceSea; else dino.face(faceSea);
-    holdRod(who);
+    holdRod(sl);
     await wait(0.3);
     // 甩竿
-    F.state = "casting";
-    F.castT = T;
-    rod.tip.getWorldPosition(bobFrom); world.worldToLocal(bobFrom);
-    bob.root.visible = true; line.visible = true;
+    sl.state = "casting";
+    sl.castT = T;
+    sl.rod.tip.getWorldPosition(sl.bobFrom); world.worldToLocal(sl.bobFrom);
+    sl.bob.root.visible = true; sl.line.visible = true;
     await wait(0.9);
-    W.splash(bobTo, 0.6);
-    F.state = "waiting";
-    let result;
-    try { result = await res; } catch (e) { result = { error: e.message || "失败" }; }
-    if (result.error) {
-      await wait(0.8);
-      await endFishing(who);
+    W.splash(sl.bobTo, 0.6);
+    sl.state = "waiting";
+    let result, pulled = false;
+    if (opts.derby) {
+      let c;
+      try { c = await request(); } catch (e) { c = { error: e.message || "失败" }; }
+      if (c.error) { await wait(0.5); await endFishing(sl, opts.stay); return c; }
+      await wait(c.bite / 1000);
+      sl.state = "bite";
+      sl.biteT = T;
+      W.splash(sl.bobTo, 1);
+      const t0 = performance.now();
+      if (sl.local) dispatchEvent(new CustomEvent("nest:fish-bite", { detail: { who, derby: true, ...screenOf(world.localToWorld(sl.bobTo.clone())) } }));
+      pulled = await Promise.race([new Promise((r) => { sl.pull = () => r(true); }), wait(1.6).then(() => false)]);
+      sl.pull = null;
+      const react = pulled ? Math.round(performance.now() - t0) : null;
+      try { result = await c.reel(react); } catch (e) { result = { error: e.message || "失败" }; }
+    } else {
+      try { result = await res; } catch (e) { result = { error: e.message || "失败" }; }
+      if (result.error) { await wait(0.8); await endFishing(sl, opts.stay); return result; }
+      await wait(opts.biteIn != null ? opts.biteIn : 1.4 + Math.random() * 2.2);
+      sl.state = "bite";
+      sl.biteT = T;
+      W.splash(sl.bobTo, 1);
+      if (sl.local) dispatchEvent(new CustomEvent("nest:fish-bite", { detail: { who, ...screenOf(world.localToWorld(sl.bobTo.clone())) } }));
+      // 等"拉"：最多 2.2 秒，不拉也会自己拉上来（差点跑了）
+      pulled = await Promise.race([new Promise((r) => { sl.pull = () => r(true); }), wait(opts.local === false ? 0.4 : 2.2).then(() => false)]);
+      sl.pull = null;
+    }
+    if (result.error || !result.catch) { // 鱼跑了 / 出错
+      W.splash(sl.bobTo, 1.4);
+      sl.state = "waiting";
+      dispatchEvent(new CustomEvent("nest:fish-miss", { detail: { ...result, who: whoReal, derby: !!opts.derby, local: sl.local, ...screenOf(world.localToWorld(sl.bobTo.clone())) } }));
+      await wait(0.6);
+      await endFishing(sl, opts.stay);
       return result;
     }
-    await wait(1.4 + Math.random() * 2.2);
-    F.state = "bite";
-    F.biteT = T;
-    W.splash(bobTo, 1);
-    dispatchEvent(new CustomEvent("nest:fish-bite", { detail: { ...screenOf(world.localToWorld(bobTo.clone())) } }));
-    // 等"拉"：最多 2.2 秒，不拉也会自己拉上来（差点跑了）
-    const pulled = await Promise.race([new Promise((r) => { F.pull = () => r(true); }), wait(2.2).then(() => false)]);
-    F.pull = null;
-    F.state = "reeling";
-    F.reelT = T;
+    sl.state = "reeling";
+    sl.reelT = T;
     const it = buildCatch(result.catch, { toon, outlined });
-    F.caught = it;
-    it.root.position.copy(bobTo);
+    sl.caught = it;
+    it.root.position.copy(sl.bobTo);
     world.add(it.root);
     const col = RARITY_COL[result.rarity] || 0xffffff;
-    glow.color.setHex(col); beamMat.color.setHex(col);
-    W.splash(bobTo, 1.6);
-    bob.root.visible = false;
+    sl.glow.color.setHex(col); sl.beamMat.color.setHex(col);
+    W.splash(sl.bobTo, 1.6);
+    sl.bob.root.visible = false;
     await wait(1.0);
-    F.state = "reveal";
-    F.revealT = T;
+    sl.state = "reveal";
+    sl.revealT = T;
     if (result.rarity === "epic" || result.rarity === "legend") burst(stars, it.root.position.clone(), 10, 1.4);
     const at = screenOf(world.localToWorld(it.root.position.clone()));
-    dispatchEvent(new CustomEvent("nest:fish-reveal", { detail: { ...result, quick: pulled, ...at } }));
-    await wait(result.rarity === "legend" ? 3.4 : 2.6);
+    dispatchEvent(new CustomEvent("nest:fish-reveal", { detail: { ...result, quick: result.quick ?? pulled, derby: !!opts.derby, local: sl.local, ...at } }));
+    await wait(opts.derby ? 1.9 : result.rarity === "legend" ? 3.4 : 2.6);
     // 鱼放回海里（以后在浅水区游）；其他东西"噗"一下收进背包
-    F.state = "release";
-    F.relT = T;
+    sl.state = "release";
+    sl.relT = T;
     await wait(0.9);
     world.remove(it.root);
-    F.caught = null;
+    sl.caught = null;
     addSwimmer(result.catch);
-    await endFishing(who);
+    await endFishing(sl, opts.stay);
     return result;
   }
-  async function endFishing(who) {
-    line.visible = false; bob.root.visible = false;
-    dropRod();
-    glow.intensity = 0; beam.visible = false;
-    F.state = "walking";
+  async function endFishing(sl, stay) {
+    sl.line.visible = false; sl.bob.root.visible = false;
+    sl.glow.intensity = 0; sl.beam.visible = false;
+    if (stay) { sl.state = "idle"; return; } // 比赛：竿还拿着，人留在码头
+    dropRod(sl);
+    sl.state = "walking";
+    sl.atDock = false;
+    const who = sl.actor;
     if (who === "her") { her.face = null; await move(her, DOCK.base, 2.2); await move(her, HER_HOME, 1.8); }
     else { dino.face(null); await dino.go(DOCK.base); await dino.go(dino.home()); }
-    F.state = "idle"; F.fisher = null;
+    sl.state = "idle";
   }
-  function pull() { if (F.pull) { F.pull(); return true; } return false; }
+  // 比赛结束 / 不钓了：从码头走回家
+  async function leaveDock(actor) {
+    const sl = SLOTS[actor];
+    if (!sl.atDock || sl.state !== "idle") return;
+    sl.state = "walking";
+    sl.atDock = false;
+    await endFishing(sl, false);
+  }
+  function pull() { for (const sl of slotList) if (sl.pull && sl.local) { sl.pull(); return true; } return false; }
+
+  function updateSlot(sl, t, cameraLocal) {
+    if (sl.state === "idle" || sl.state === "walking") return;
+    const { rod, bob, line, lineGeo, glow, beam, beamMat, bobFrom, bobTo } = sl;
+    const tip = rod.tip.getWorldPosition(new THREE.Vector3()); world.worldToLocal(tip);
+    const hh = world.worldToLocal(headOf(sl.actor === "her" ? kitten : dino.parts()));
+    if (sl.state === "casting") {
+      const k = Math.min(1, (t - sl.castT) / 0.9);
+      rod.root.rotation.x = ROD_REST - Math.sin(k * Math.PI) * 1.4;
+      bob.root.position.lerpVectors(bobFrom, bobTo, k);
+      bob.root.position.y = lerp(bobFrom.y, SEA_Y, k) + Math.sin(k * Math.PI) * 1.4;
+    } else if (sl.state === "waiting") { bob.root.position.copy(bobTo); bobberIdle(bob, t); rod.root.rotation.x = ROD_REST + Math.sin(t * 1.3) * 0.03; }
+    else if (sl.state === "bite") { bob.root.position.copy(bobTo); bobberBite(bob, t - sl.biteT); rod.root.rotation.x = ROD_REST + 0.15 + Math.sin(t * 25) * 0.08; }
+    else if (sl.state === "reeling" && sl.caught) {
+      const k = Math.min(1, (t - sl.reelT) / 1.0);
+      rod.root.rotation.x = ROD_REST - Math.sin(k * Math.PI * 0.5) * 0.9;
+      const dst = hh.clone().add(new THREE.Vector3(0, 0.9, 0)).lerp(sl.stand.clone().add(DOCK.dir.clone().multiplyScalar(0.6)).setY(1.6), 0.4);
+      sl.caught.root.position.lerpVectors(bobTo, dst, k * k * (3 - 2 * k));
+      sl.caught.root.position.y += Math.sin(k * Math.PI) * 1.2;
+      sl.caught.root.rotation.y = t * 6;
+      swim(sl.caught, t, 3);
+      glow.position.copy(sl.caught.root.position); glow.intensity = 3 * k;
+    } else if ((sl.state === "reveal" || sl.state === "release") && sl.caught) {
+      const c = sl.caught.root;
+      if (sl.state === "reveal") {
+        c.position.y += Math.sin(t * 2.5) * 0.002;
+        c.rotation.y = lerpAngle(c.rotation.y % (Math.PI * 2), Math.atan2(cameraLocal.x - c.position.x, cameraLocal.z - c.position.z), 0.08); // 侧面朝镜头
+        const k = Math.min(1, (t - sl.revealT) / 0.6);
+        c.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.4 + 0.3 * k);
+        if (sl.caught.openLid) sl.caught.openLid(Math.min(1, (t - sl.revealT) / 0.8));
+        if (sl.caught.puff) sl.caught.puff(Math.min(1, (t - sl.revealT) / 0.5));
+        beam.visible = true;
+        beam.position.set(c.position.x, c.position.y - 0.4, c.position.z);
+        beamMat.opacity = 0.35 * k;
+        swim(sl.caught, t, 1.5);
+      } else {
+        const k = Math.min(1, (t - sl.relT) / 0.9);
+        c.position.lerp(bobTo.clone().setY(SEA_Y - 0.3), k * 0.25);
+        c.scale.setScalar(Math.max(0.01, 1.3 * (1 - k)));
+        beamMat.opacity = 0.35 * (1 - k);
+        glow.intensity = 3 * (1 - k);
+        if (k >= 1) W.splash(bobTo, 1);
+      }
+      glow.position.copy(c.position);
+    }
+    // 鱼线：竿尖垂到浮漂，中间往下坠
+    const end = sl.caught && sl.state !== "reveal" && sl.state !== "release" ? sl.caught.root.position : world.worldToLocal(bob.top.getWorldPosition(new THREE.Vector3()));
+    const pts = lineGeo.attributes.position;
+    for (let i = 0; i < 12; i++) {
+      const k = i / 11;
+      const sag = sl.state === "casting" ? 0 : Math.sin(k * Math.PI) * 0.35;
+      pts.setXYZ(i, lerp(tip.x, end.x, k), lerp(tip.y, end.y, k) - sag, lerp(tip.z, end.z, k));
+    }
+    pts.needsUpdate = true;
+    line.visible = sl.state !== "reveal" && sl.state !== "release";
+  }
 
   /* ------------------------------------------------------------ 浅水区游泳的鱼（钓到过的鱼都会在这里） */
   const swimmers = [];
@@ -457,7 +558,7 @@ export function createCast(ctx) {
     for (let i = waits.length - 1; i >= 0; i--) if (t >= waits[i].at) { waits[i].res(); waits.splice(i, 1); }
 
     // ---- 闲逛：在线时小猫在家附近溜达，小马在草地上慢慢走
-    if (!S.busy && F.state === "idle" && t > wanderAt && t > manualUntil) {
+    if (!S.busy && !busyFishing("her") && !SLOTS.her.atDock && t > wanderAt && t > manualUntil) {
       wanderAt = t + 5 + Math.random() * 6;
       if (!S.asleep && !S.riding && S.online) {
         const a = Math.random() * Math.PI * 2, r = 0.3 + Math.random() * 0.8;
@@ -470,7 +571,7 @@ export function createCast(ctx) {
       }
     }
     // 不在线 / 睡着：小猫趴在小马背上睡觉，小马在家待着
-    const napping = (S.asleep || !S.online) && !S.busy && F.fisher !== "her" && T > manualUntil;
+    const napping = (S.asleep || !S.online) && !S.busy && !busyFishing("her") && !SLOTS.her.atDock && T > manualUntil;
     if (napping && !S.riding) {
       if (kitten.root.parent === world && kitten.root.position.distanceTo(pony.root.position) > 0.7) {
         her.target.copy(nearPoint(kitten.root.position, pony.root.position.clone().setY(0), 0.5 * GAP));
@@ -522,7 +623,7 @@ export function createCast(ctx) {
       else if (act === "highfive" && i === 1) { z = 2.6; }
       else if (act === "give" || (act === "kiss" && i === 1)) { z = s * 0.6; x = -1.2; }
       else if (act === "poke" && i === 1) { z = 0.8; x = -1.3 + Math.sin(since * 20) * 0.2; }
-      else if (F.fisher === "her" && i === 1 && F.state !== "walking") { z = 0.5; x = -0.6; }
+      else if ((SLOTS.her.atDock || (busyFishing("her") && SLOTS.her.state !== "walking")) && i === 1) { z = 0.5; x = -0.6; }
       else if (S.mood === "happy" && !sleepy) { z = base + s * (0.25 + Math.sin(t * 7 + i) * 0.2); }
       if (S.riding && !act) return;
       a.rotation.z = lerp(a.rotation.z, z, 0.3);
@@ -580,58 +681,7 @@ export function createCast(ctx) {
     }
 
     // ---- 钓鱼
-    if (F.state !== "idle" && F.state !== "walking") {
-      const tip = rod.tip.getWorldPosition(new THREE.Vector3()); world.worldToLocal(tip);
-      if (F.state === "casting") {
-        const k = Math.min(1, (t - F.castT) / 0.9);
-        rod.root.rotation.x = ROD_REST - Math.sin(k * Math.PI) * 1.4;
-        bob.root.position.lerpVectors(bobFrom, bobTo, k);
-        bob.root.position.y = lerp(bobFrom.y, SEA_Y, k) + Math.sin(k * Math.PI) * 1.4;
-      } else if (F.state === "waiting") { bob.root.position.copy(bobTo); bobberIdle(bob, t); rod.root.rotation.x = ROD_REST + Math.sin(t * 1.3) * 0.03; }
-      else if (F.state === "bite") { bob.root.position.copy(bobTo); bobberBite(bob, t - F.biteT); rod.root.rotation.x = ROD_REST + 0.15 + Math.sin(t * 25) * 0.08; }
-      else if (F.state === "reeling" && F.caught) {
-        const k = Math.min(1, (t - F.reelT) / 1.0);
-        rod.root.rotation.x = ROD_REST - Math.sin(k * Math.PI * 0.5) * 0.9;
-        const dst = hh.clone().add(new THREE.Vector3(0, 0.9, 0)).lerp(DOCK.tip.clone().add(DOCK.dir.clone().multiplyScalar(0.6)).setY(1.6), 0.4);
-        F.caught.root.position.lerpVectors(bobTo, dst, k * k * (3 - 2 * k));
-        F.caught.root.position.y += Math.sin(k * Math.PI) * 1.2;
-        F.caught.root.rotation.y = t * 6;
-        swim(F.caught, t, 3);
-        glow.position.copy(F.caught.root.position); glow.intensity = 3 * k;
-      } else if ((F.state === "reveal" || F.state === "release") && F.caught) {
-        const c = F.caught.root;
-        if (F.state === "reveal") {
-          c.position.y += Math.sin(t * 2.5) * 0.002;
-          c.rotation.y = lerpAngle(c.rotation.y % (Math.PI * 2), Math.atan2(cameraLocal.x - c.position.x, cameraLocal.z - c.position.z), 0.08); // 侧面朝镜头
-          const k = Math.min(1, (t - F.revealT) / 0.6);
-          c.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.4 + 0.3 * k);
-          if (F.caught.openLid) F.caught.openLid(Math.min(1, (t - F.revealT) / 0.8));
-          if (F.caught.puff) F.caught.puff(Math.min(1, (t - F.revealT) / 0.5));
-          beam.visible = true;
-          beam.position.set(c.position.x, c.position.y - 0.4, c.position.z);
-          beamMat.opacity = 0.35 * k;
-          swim(F.caught, t, 1.5);
-        } else {
-          const k = Math.min(1, (t - F.relT) / 0.9);
-          c.position.lerp(bobTo.clone().setY(SEA_Y - 0.3), k * 0.25);
-          c.scale.setScalar(Math.max(0.01, 1.3 * (1 - k)));
-          beamMat.opacity = 0.35 * (1 - k);
-          glow.intensity = 3 * (1 - k);
-          if (k >= 1) W.splash(bobTo, 1);
-        }
-        glow.position.copy(c.position);
-      }
-      // 鱼线：竿尖垂到浮漂，中间往下坠
-      const end = F.caught && F.state !== "reveal" && F.state !== "release" ? F.caught.root.position : world.worldToLocal(bob.top.getWorldPosition(new THREE.Vector3()));
-      const pts = lineGeo.attributes.position;
-      for (let i = 0; i < 12; i++) {
-        const k = i / 11;
-        const sag = F.state === "casting" ? 0 : Math.sin(k * Math.PI) * 0.35;
-        pts.setXYZ(i, lerp(tip.x, end.x, k), lerp(tip.y, end.y, k) - sag, lerp(tip.z, end.z, k));
-      }
-      pts.needsUpdate = true;
-      line.visible = F.state !== "reveal" && F.state !== "release";
-    }
+    for (const sl of slotList) updateSlot(sl, t, cameraLocal);
 
     // ---- 浅水区的鱼
     schoolTick(t);
@@ -661,8 +711,13 @@ export function createCast(ctx) {
   }
 
   return {
-    update, play, setState, fish, pull, setBook, walkHer,
-    fishing: () => F.state !== "idle",
+    update, play, setState, fish, pull, setBook, walkHer, leaveDock,
+    // 小游戏用：让小猫走到某处（返回到达的 promise）/ 朝向某处
+    herGo: (p) => { if (S.riding) seatKitten(false); manualUntil = T + 25; her.face = null; return move(her, p, 1.6); },
+    herFace: (fn) => { her.face = fn; },
+    kittenScale: KITTEN_SCALE,
+    // fishing()：有人在钓或者站在码头上（镜头对准码头）；fishing(actor)：这个角色正在钓（站着等下一竿不算）
+    fishing: (actor) => (actor ? busyFishing(actor) : slotList.some((sl) => sl.state !== "idle" || sl.atDock)),
     kittenScreen: () => screenOf(world.localToWorld(world.worldToLocal(headOf(kitten)))),
     kitten, pony,
   };

@@ -29,7 +29,7 @@
     welcome: "开张礼包 🎉", bed: "按时睡觉 🛏", sleep7: "睡够 7 小时 😴", green: "恢复满格 💚", regular: "作息规律 📅",
     active: "今天动起来了 🏸", streak3: "连续 3 晚按时睡 🔥", nudge: "一催就睡 🔔", feed: "今天第一次喂食 🍙",
     notes: "纸条往来 💌", calm: "和好奖励 🌈", fish: "钓鱼收获 🎣", mood: "报心情 💭",
-    qa: "每日一问 📝", tuck_me: "盖被子 🛏", tuck_her: "盖被子 🛏", harvest: "菜地收获 🧺", gacha: "扭蛋 🎰",
+    qa: "每日一问 📝", hunt: "岛上藏宝 🗺", derby: "钓鱼大赛 🎣", quiz: "默契考验 💞", tuck_me: "盖被子 🛏", tuck_her: "盖被子 🛏", harvest: "菜地收获 🧺", gacha: "扭蛋 🎰",
   };
   // 她报的心情、两只角色之间的小动作、钓鱼的奖池（名字和图标；概率和星星以后端为准）
   const MOODS = { happy: ["开心", "😊"], tired: ["累了", "😮‍💨"], miss: ["想你", "🥺"], angry: ["有点气", "😤"], sleepy: ["困了", "😪"] };
@@ -270,6 +270,14 @@
       else if (e.kind === "farm") { const [a, c] = (e.item || "").split(":"); const ci = CROP_INFO[c] || ["", "🌱"]; t = a === "plant" ? `${w}种下了${ci[0]} ${ci[1]}` : a === "water" ? `${w}给菜地浇了水 💧` : a === "harvest" ? `${w}收获了${ci[0]} ${ci[1]}` : ""; if (!t) return ""; }
       else if (e.kind === "wear") { const o = OUTFIT_INFO[e.item] || ["衣服", "👗"]; t = e.n ? `${w}给小猫戴上了${o[0]} ${o[1]}` : `${w}给小猫摘掉了${o[0]}`; }
       else if (e.kind === "fish") { const c = CATCH[e.item] || ["神秘的东西", "❓", "common"]; t = `${w}钓到了${c[0]} ${c[1]}${c[2] !== "common" ? `（${RARITY[c[2]][0]}）` : ""}`; }
+      else if (e.kind === "hunt") { t = { hide: `${w}在小岛上藏了一个宝藏 🗺`, cancel: `${w}把宝藏收回去了`, found: `${w}挖到了宝藏 💰（${e.n} 铲）`, lost: `宝藏没被挖到，${w}赢了 🗺` }[e.item]; if (!t) return ""; }
+      else if (e.kind === "dig") return "";
+      else if (e.kind === "derby") { t = e.item === "start" ? `${w}发起了钓鱼大赛 🎣` : e.who === "sys" ? "钓鱼大赛打平了 🤝" : `${w}赢了钓鱼大赛 🏆`; }
+      else if (e.kind === "dfish") { if (e.item === "miss") return ""; const c = CATCH[e.item] || ["鱼", "🐟"]; t = `${w}在钓鱼大赛钓到${c[0]} ${c[1]} +${e.n} 分`; }
+      else if (e.kind === "quiz") t = `${w}交了今天的默契考验 💞`;
+      else if (e.kind === "wishgrant") t = `${w}赢了一张愿望券 🎟`;
+      else if (e.kind === "wish") t = `${w}写好了一个愿望 🎟`;
+      else if (e.kind === "wishdone") t = `${w}兑现了一个愿望 ✅`;
       return `<li class="${e.who === me ? "mine" : ""}"><span>${esc(t)}</span><time>${ago(new Date(e.ts).toISOString())}</time></li>`;
     }));
     $("#timeline").innerHTML = lines.filter(Boolean).join("") || `<li class="muted">还没有互动，${me === "her" ? "先喂它点好吃的吧" : `等${HER()}来玩`} ✨</li>`;
@@ -311,6 +319,17 @@
     else if (e.kind === "star") { if (!/^(fish|gacha|harvest):/.test(e.item || "")) { R && R.react("love"); say(`+${e.n} ⭐ ${REASONS[(e.item || "").split(":")[0]] || ""}`); } }
     else if (e.kind === "buy") { R && R.react("love"); say(`${whoName(e.who)}给小岛买了${(ITEMS[e.item] || ["新东西"])[0]} ${(ITEMS[e.item] || ["", "🎁"])[1]}`); }
     else if (e.kind === "nudge") { say(`🌙 ${HER()}催你睡觉啦！现在睡着就能拿 3 颗星星`); }
+    else if (e.kind === "hunt" && e.item === "hide") { say(`🗺 ${whoName(e.who)}在小岛上藏了一个宝藏！去「一起玩」挖宝吧`); sfx("chime"); }
+    else if (e.kind === "derby" && e.item === "start") { say(`🎣 ${whoName(e.who)}向你发起了钓鱼大赛！去「一起玩」应战`); sfx("chime"); }
+    else if (e.kind === "quiz") { say(`💞 ${whoName(e.who)}交了今天的默契考验`); }
+    else if (e.kind === "wish") { say(`🎟 ${whoName(e.who)}写好了一个愿望，去「一起玩 → 愿望券」看看`); }
+    else if (e.kind === "wishdone") { say(`✅ ${whoName(e.who)}兑现了你的愿望`); }
+    else if (e.kind === "dfish") {
+      // 对方在钓鱼大赛里钓了一竿：在我这边也演一遍（结果已经定了）
+      const res = e.item === "miss" ? { catch: null, miss: "slow", pts: 0, who: e.who } : { catch: e.item, rarity: (CATCH[e.item] || [0, 0, "common"])[2], pts: e.n, who: e.who, remote: true };
+      if (R && R.fish && !R.fishing(e.who) && Date.now() - e.ts < 60000) R.fish(e.who, async () => res, { stay: true, local: false });
+      else derbyToast(res, e.who);
+    }
   }
 
   async function poll(first) {
@@ -323,6 +342,7 @@
       events = events.concat(fresh);
       lastId = fresh[fresh.length - 1].id;
       if (fresh.some((e) => ["star", "buy", "place", "fish", "gacha", "farm", "wear", "move", "seed", "spend"].includes(e.kind))) await loadWallet();
+      if (!first && fresh.some((e) => ["hunt", "dig", "derby", "dfish", "quiz", "wishgrant", "wish", "wishdone"].includes(e.kind))) loadGames();
       if (!first) for (const e of fresh) await onRemote(e);
       render(); renderTimeline();
     } catch (e) {
@@ -350,19 +370,20 @@
   }
 
   /* ------------------------------------------------------------ actions */
-  const PANELS = { earn: "#earn", shop: "#shop-wrap", book: "#book", gacha: "#gacha", farm: "#farm", wardrobe: "#wardrobe", qa: "#qa" };
+  const PANELS = { earn: "#earn", shop: "#shop-wrap", book: "#book", gacha: "#gacha", farm: "#farm", wardrobe: "#wardrobe", qa: "#qa", games: "#games" };
   function openPanel(k) {
     panel = panel === k ? null : k;
     for (const [id, sel] of Object.entries(PANELS)) $(sel).hidden = id !== panel;
     document.querySelectorAll("[data-panel]").forEach((b) => b.classList.toggle("on", b.dataset.panel === panel));
     if (panel === "qa") loadQA();
+    if (panel === "games") { renderGames(); loadGames(); }
     renderPanels();
   }
   root.addEventListener("click", async (ev) => {
     const b = ev.target.closest("button");
     if (!b) return;
     if (b.dataset.panel) { openPanel(b.dataset.panel); return; }
-    if (b.dataset.who) { me = b.dataset.who; store.set(WHO_KEY, me); if (me === "me") await checkPush(); render(); renderTimeline(); startRealtime().catch(() => {}); return; }
+    if (b.dataset.who) { me = b.dataset.who; store.set(WHO_KEY, me); if (me === "me") await checkPush(); render(); renderTimeline(); startRealtime().catch(() => {}); loadGames(); return; }
     if (b.dataset.weapon) { weapon = b.dataset.weapon; render(); sfx("pop"); return; }
     if (b.dataset.doact) {
       const k = b.dataset.doact;
@@ -517,6 +538,7 @@
     fishingNow = false;
     await loadWallet(); await poll(); render(); renderTimeline();
   }
+  addEventListener("nest:fish-miss", (ev) => { document.querySelectorAll(".bite").forEach((x) => x.remove()); if (ev.detail.pts != null || ev.detail.derby) derbyToast({ catch: null, miss: ev.detail.miss }, ev.detail.who || me); });
   // 咬钩：在浮漂上冒一个"快拉！"
   addEventListener("nest:fish-bite", (ev) => {
     sfx("pop"); buzz([40, 40, 40]);
@@ -530,6 +552,7 @@
   async function reveal(ev) {
     const d = ev.detail, c = CATCH[d.catch] || ["神秘的东西", "❓", d.rarity || "common"], rar = RARITY[d.rarity || c[2]] || RARITY.common;
     document.querySelectorAll(".bite").forEach((x) => x.remove());
+    if (d.pts != null) { derbyToast(d, d.who || me); sfx(d.rarity === "common" ? "pop" : "chime"); return; } // 钓鱼大赛：只弹一句，不打断
     if (d.remote) { say(`${whoName(d.who)}钓到了${c[0]} ${c[1]}${c[2] !== "common" ? `（${rar[0]}）` : ""}`); return; }
     let extra = "";
     if (d.catch === "bottle") {
@@ -649,7 +672,8 @@
       <li>🔔 ${HER()}点"该睡觉啦"，他 30 分钟内睡着 <b>+3</b></li>
       <li>🍙 每天第一次喂食 <b>+1</b> · 💌 同一天互相留言 <b>+1</b> · 🌈 吵架后和好 <b>+1</b> · 💭 ${HER()}每天报一次心情 <b>+1</b></li>
       <li>🎣 钓鱼：每人每天免费 3 竿，钓到锦鲤、鲸鱼、海龟、宝箱和传说级的宝贝都有星星，第一次钓到新东西再 <b>+1</b>（连续 14 竿没出史诗，第 15 竿保底）</li>
-      <li>📝 每日一问两个人都答了 <b>+2</b> · 🛏 给对方盖被子 <b>+1</b> · 🧺 菜地收获 <b>+4～9</b> · 🎰 扭蛋偶尔出星星袋</li></ul>
+      <li>📝 每日一问两个人都答了 <b>+2</b> · 🛏 给对方盖被子 <b>+1</b> · 🧺 菜地收获 <b>+4～9</b> · 🎰 扭蛋偶尔出星星袋</li>
+      <li>🎮 一起玩：🗺 藏宝挖到 <b>+1～8</b>（铲数越少越多）· 🎣 钓鱼大赛比完 <b>+3</b> · 💞 默契考验 <b>+1～5</b> · 🍀 平时钓到今日幸运鱼 <b>+2</b></li></ul>
       <p class="muted">手环的星星每 10 分钟结算一次。最近入账：${(wallet.recent || []).slice(0, 5).map((x) => `${REASONS[x.item.split(":")[0]] || x.item} +${x.n}`).join(" · ") || "还没有"}</p>`;
     renderPanels();
   }
@@ -902,6 +926,340 @@
     if (ev.detail.what === "xmas") { say(["圣诞快乐 🎄", "Merry Christmas ✨", "今年的圣诞树亮啦 🎄"][Math.floor(Math.random() * 3)]); hearts(ev.detail.x, ev.detail.y, 8); }
   });
 
+  /* ------------------------------------------------------------ 小游戏：岛上藏宝 / 钓鱼大赛 / 默契大考验 / 愿望券 */
+  let games = null, gameTab = "hunt", huntMode = null, huntPick = null, quizDraft = null, derbyBusy = false, gamesSeen = null;
+  const otherOf = (w) => (w === "me" ? "her" : "me");
+  const otherName = () => (me === "her" ? "他" : HER());
+  const BAND = { hot: ["🔥", "超烫"], warm: ["♨️", "有点暖"], cool: ["🌬", "有点凉"], cold: ["❄️", "好冷"], found: ["💰", "挖到了"] };
+  const SRC = { hunt: "岛上藏宝", derby: "钓鱼大赛" };
+  async function gamesApi(body) {
+    const r = await fetch(API + "/games", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: me, ...body }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || "api " + r.status);
+    return j;
+  }
+  async function loadGames() {
+    if (!me || !API) return;
+    try {
+      const r = await fetch(API + "/games?who=" + me, { headers: { authorization: "Bearer " + (await getToken()) } });
+      if (!r.ok) return;
+      const prev = games;
+      games = await r.json();
+      gamesDiff(prev, games); // 不等动画：数据先刷新，对方的挖坑 / 开宝箱在后台演
+    } catch {}
+    syncGames3d();
+    if (panel === "games") renderGames();
+    renderHuntBar();
+  }
+  function syncGames3d() {
+    const R = window.NEST3D;
+    if (R && R.setGames && games) R.setGames(games, me, { me: "Zilong", her: HER() });
+  }
+  // 对方的新动作：在我这边演出来（挖坑、钓鱼）
+  function gamesDiff(prev, cur) {
+    const R = window.NEST3D;
+    if (!prev || !R) return;
+    const ph = prev.hunt, ch = cur.hunt;
+    if (ch && ph && ch.id === ph.id) {
+      const fresh = ch.digs.slice(ph.digs.length);
+      const digger = otherOf(ch.hider);
+      if (digger !== me && fresh.length && R.remoteDigs) {
+        const last = fresh[fresh.length - 1];
+        say(`${whoName(digger)}挖了一铲：${BAND[last.band][0]} ${BAND[last.band][1]}`);
+        const end = ch.status !== "live" && ch.x != null ? { found: ch.status === "found", x: ch.x, z: ch.z } : null;
+        R.remoteDigs(digger, fresh, end).then(() => {
+          syncGames3d();
+          if (end && end.found) say(`💰 ${whoName(digger)}挖到了你藏的宝藏！愿望券归${whoName(digger)}`);
+          if (end && !end.found) say(`🗺 ${whoName(digger)}没找到！宝藏还在你手里，愿望券归你`);
+        });
+      }
+    }
+    const pd = prev.derby, cd = cur.derby;
+    if (cd && pd && cd.id === pd.id && pd.status === "live" && cd.status === "done") derbyOver(cd);
+    const pq = prev.quiz, cq = cur.quiz;
+    if (cq && pq && cq.day === pq.day && !pq.result && cq.result) { say(`💞 默契考验揭晓：${cq.result.score}/10`); sfx("chime"); if (panel !== "games") burst(); }
+  }
+  function derbyOver(d) {
+    const R = window.NEST3D;
+    const a = d.p.me.total, b = d.p.her.total;
+    const msg = !d.winner ? `🎣 钓鱼大赛平局！${a} : ${b}` : `🏆 ${whoName(d.winner)}赢了钓鱼大赛！${Math.max(a, b)} : ${Math.min(a, b)}，拿到一张愿望券`;
+    setTimeout(() => { say(msg); sfx("chime"); if (d.winner === me) burst(); }, 3000); // 等最后一竿的提示先说完
+    setTimeout(() => { if (R && R.leaveDock) { R.leaveDock("me"); R.leaveDock("her"); } }, 3500);
+  }
+
+  function renderGames() {
+    const el = $("#games");
+    if (!el) return;
+    if (!games) { el.innerHTML = `<p class="sub">加载中…</p>`; loadGames(); return; }
+    const tabs = [["hunt", "🗺 岛上藏宝"], ["derby", "🎣 钓鱼大赛"], ["quiz", "💞 默契考验"], ["wish", "🎟 愿望券"]];
+    const todo = (games.wishes || []).filter((w) => (w.who === me && !w.wish) || (w.wish && !w.done && w.who !== me)).length;
+    el.innerHTML = `<div class="gtabs">${tabs.map(([k, t]) => `<button type="button" data-gtab="${k}" class="${gameTab === k ? "on" : ""}">${t}${k === "wish" && todo ? `<i class="dot">${todo}</i>` : ""}</button>`).join("")}</div><div id="gbody"></div>`;
+    ({ hunt: renderHunt, derby: renderDerby, quiz: renderQuiz, wish: renderWish })[gameTab]();
+  }
+
+  // ---------------- 岛上藏宝
+  function renderHunt() {
+    const h = games.hunt, el = $("#gbody");
+    const live = h && h.status === "live";
+    let s = "";
+    if (!live) {
+      if (h && h.status !== "cancel" && (h.status === "found" || h.status === "lost")) {
+        const seeker = otherOf(h.hider);
+        s += `<p class="gres">${h.status === "found" ? `💰 ${whoName(seeker)}用了 ${h.digs.length} 铲挖到了${whoName(h.hider)}藏的宝藏` : `🗺 ${whoName(seeker)}挖了 ${h.max} 铲也没找到，宝藏归${whoName(h.hider)}`}</p>`;
+      }
+      s += `<p class="sub">一个人把宝箱埋在小岛草地上，另一个人来挖：每一铲都会告诉你离宝藏有多近（🔥 超烫 / ♨️ 有点暖 / 🌬 有点凉 / ❄️ 好冷），挖到第 3、6 铲还有提示。一共 ${8} 铲。<br>挖到了：挖宝的人赢一张愿望券；8 铲都没挖到：藏宝的人赢。两种结果小岛都有星星。</p>
+        <div class="row"><button class="bigbtn" data-hunt="hide">🗺 藏一个宝藏给${otherName()}</button></div>`;
+    } else if (h.hider === me) {
+      s += `<p class="gres">宝藏藏好啦，等${otherName()}来挖 👀（已经挖了 ${h.digs.length}/${h.max} 铲）</p>${digList(h)}`;
+      s += h.digs.length ? `` : `<div class="row"><button class="mini-btn" data-hunt="cancel">不藏了</button></div>`;
+    } else {
+      s += `<p class="gres">${otherName()}在小岛上藏了一个宝藏！还剩 <b>${h.max - h.digs.length}</b> 铲</p>${digList(h)}
+        <div class="row"><button class="bigbtn" data-hunt="seek">⛏ ${huntMode === "seek" ? "正在挖宝…" : "开始挖宝"}</button></div>`;
+    }
+    const hist = (games.huntHist || []).slice(-5).reverse();
+    if (hist.length) s += `<div class="ghist"><p class="sub">最近几局</p>${hist.map((x) => `<div>${new Date(x.id).toLocaleDateString()} · ${whoName(x.hider)}藏 · ${x.found ? `${x.digs} 铲挖到` : "没挖到"} · 🎟 ${whoName(x.winner)}</div>`).join("")}</div>`;
+    el.innerHTML = s;
+  }
+  function digList(h) {
+    if (!h.digs.length && !h.hints.length) return "";
+    return `<div class="digs">${h.digs.map((d, i) => `<span class="dig b-${d.band}">${i + 1}. ${BAND[d.band][0]} ${BAND[d.band][1]}</span>`).join("")}</div>${h.hints.map((t) => `<p class="hint">💡 ${esc(t)}</p>`).join("")}`;
+  }
+  function renderHuntBar() {
+    const bar = $("#game-bar");
+    if (!bar) return;
+    const h = games && games.hunt;
+    if (huntMode === "seek" && !(h && h.status === "live" && h.hider !== me)) stopHunt();
+    if (!huntMode) { bar.hidden = true; return; }
+    bar.hidden = false;
+    if (huntMode === "hide") {
+      bar.innerHTML = huntPick
+        ? `<span>藏在这里？可以留一张纸条放进宝箱：</span><input id="hunt-note" maxlength="120" placeholder="（可选）只有${otherName()}挖到才能看到"><button type="button" data-hunt="confirm" class="primary">✓ 藏好了</button><button type="button" data-hunt="stop">取消</button>`
+        : `<span>点小岛的草地，选一个藏宝的地方 🗺</span><button type="button" data-hunt="stop">取消</button>`;
+    } else {
+      const left = h.max - h.digs.length, last = h.digs[h.digs.length - 1];
+      bar.innerHTML = `<span>点草地挖一铲 ⛏ 还剩 <b>${left}</b> 铲${last ? ` · 上一铲：${BAND[last.band][0]} ${BAND[last.band][1]}` : ""}${h.hints.length ? `<br>💡 ${esc(h.hints[h.hints.length - 1])}` : ""}</span><button type="button" data-hunt="stop">先不挖了</button>`;
+    }
+  }
+  function startHunt(mode) {
+    const R = window.NEST3D;
+    if (!R || !R.setTapMode) { say("3D 小岛还没加载好，等一下再试～"); return; }
+    huntMode = mode; huntPick = null;
+    R.setTapMode(mode === "hide" ? onHidePick : onSeekTap);
+    document.getElementById("scene").scrollIntoView({ behavior: "smooth", block: "center" });
+    renderHuntBar(); if (panel === "games") renderGames();
+  }
+  function stopHunt() {
+    const R = window.NEST3D;
+    huntMode = null; huntPick = null;
+    if (R && R.setTapMode) R.setTapMode(null);
+    if (R && R.previewHide) R.previewHide(null);
+    syncGames3d();
+    renderHuntBar();
+  }
+  function onHidePick(p) {
+    huntPick = { x: Math.round(p.x * 100) / 100, z: Math.round(p.z * 100) / 100 };
+    window.NEST3D.previewHide(huntPick);
+    sfx("pop");
+    renderHuntBar();
+  }
+  let digging = false;
+  async function onSeekTap(p) {
+    if (digging) return;
+    const R = window.NEST3D, h = games && games.hunt;
+    if (!h || h.status !== "live") { stopHunt(); return; }
+    digging = true;
+    const x = Math.round(p.x * 100) / 100, z = Math.round(p.z * 100) / 100;
+    const req = gamesApi({ game: "hunt", op: "dig", x, z });
+    try {
+      const r = await R.localDig(me, x, z, req);
+      if (r.error) { say("这一铲没挖下去（" + r.error + "）"); }
+      else {
+        sfx(r.band === "found" ? "chime" : "pop"); buzz(r.band === "hot" || r.band === "found" ? [30, 40, 30] : 20);
+        if (r.hint) say("💡 " + r.hint);
+        games.hunt = r.hunt;
+        if (r.result) {
+          stopHunt();
+          if (r.result.found) {
+            burst();
+            const note = r.hunt.box ? await open(r.hunt.box) : null;
+            say(`💰 挖到啦！用了 ${r.hunt.digs.length} 铲`);
+            gameCard("💰", "挖到宝藏啦！", `用了 ${r.hunt.digs.length} 铲 · 小岛 +${r.result.stars} ⭐ · 你赢了一张愿望券 🎟`, note ? `宝箱里有${otherName()}的纸条：「${note}」` : "");
+          } else say(`铲子用完了…宝藏归${otherName()}啦（小岛 +${r.result.stars} ⭐）`);
+          await loadGames(); loadWallet();
+        }
+      }
+    } finally { digging = false; renderHuntBar(); if (panel === "games") renderGames(); }
+  }
+  async function confirmHide() {
+    if (!huntPick) return;
+    const R = window.NEST3D, note = ($("#hunt-note") && $("#hunt-note").value.trim()) || "";
+    const spot = huntPick;
+    try {
+      const r = await gamesApi({ game: "hunt", op: "hide", x: spot.x, z: spot.z, box: note ? await seal(note) : undefined });
+      huntMode = null; huntPick = null;
+      if (R && R.setTapMode) R.setTapMode(null);
+      renderHuntBar();
+      games.hunt = r.hunt;
+      say(`藏好啦 🤫 等${otherName()}来挖`);
+      if (R && R.buryChest) await R.buryChest(me, spot.x, spot.z);
+      await loadGames();
+    } catch (e) { say("没藏上（" + e.message + "）"); }
+  }
+
+  // ---------------- 钓鱼大赛
+  const FISHN = (f) => (CATCH[f] || ["神秘的东西", "❓"]);
+  function renderDerby() {
+    const d = games.derby, el = $("#gbody"), lucky = FISHN(games.lucky);
+    let s = `<p class="sub">今日幸运鱼：${lucky[1]} <b>${lucky[0]}</b>（比赛里分数 ×2，平时钓到也 +2 ⭐）</p>`;
+    if (!d || d.status !== "live") {
+      if (d && d.status === "done") s += `<p class="gres">上一场：Zilong ${d.p.me.total} : ${d.p.her.total} ${HER()} · ${d.winner ? `🏆 ${whoName(d.winner)}赢了` : "平局"}</p>`;
+      s += `<p class="sub">每人 5 竿，24 小时内打完。同时在线就一起站在码头上钓，看得到对方钓到了什么。<br>浮漂一沉就点「快拉」：0.4 秒内拉起来有「快手」加成（多抽一次取好的），超过 1.5 秒鱼就跑了。<br>赢的人拿一张愿望券，奖杯在岛上摆 7 天；比完小岛 +3 ⭐。</p>
+        <div class="row"><button class="bigbtn" data-derby="challenge">🎣 向${otherName()}发起钓鱼大赛</button></div>`;
+    } else {
+      const mine = d.p[me], theirs = d.p[otherOf(me)], left = d.max - mine.casts.length;
+      const row = (who, p) => `<div class="drow"><b>${who === "her" ? "🐱" : "🦖"} ${who === me ? "我" : whoName(who)}</b><span class="dots">${Array.from({ length: d.max }, (_, i) => { const c = p.casts[i]; return `<i class="${c ? (c.f ? "hit" : "miss") : ""}" title="${c ? (c.f ? FISHN(c.f)[0] + " " + c.pts : "跑了") : ""}">${c ? (c.f ? FISHN(c.f)[1] : "💨") : ""}</i>`; }).join("")}</span><b class="pts">${p.total}</b></div>`;
+      s += `<div class="derby">${row(me, mine)}${row(otherOf(me), theirs)}</div>
+        <p class="sub">还有 ${Math.max(0, Math.round((d.until - Date.now()) / 3600000))} 小时结束 · ${theirs.casts.length >= d.max ? `${otherName()}已经钓完了` : isOnline(otherOf(me)) ? `${otherName()}在线，一起钓吧！` : `等${otherName()}上线来钓`}</p>
+        <div class="row">${left > 0 ? `<button class="bigbtn" data-derby="cast" ${derbyBusy ? "disabled" : ""}>🎣 甩一竿（还剩 ${left}）</button>` : `<span class="gres">你钓完啦，等${otherName()}～</span>`}<button class="mini-btn" data-derby="quit">认输</button></div>`;
+    }
+    const hist = (games.derbyHist || []).slice(-5).reverse();
+    if (hist.length) s += `<div class="ghist"><p class="sub">战绩（Zilong : ${HER()}）</p>${hist.map((x) => `<div>${new Date(x.id).toLocaleDateString()} · ${x.me} : ${x.her} · ${x.winner ? "🏆 " + whoName(x.winner) : "平局"}</div>`).join("")}</div>`;
+    el.innerHTML = s;
+  }
+  async function derbyCast() {
+    const R = window.NEST3D;
+    if (derbyBusy) return;
+    if (fishingNow) { say("鱼竿还在水里呢～"); return; }
+    derbyBusy = true; renderGames();
+    const request = async () => {
+      const c = await gamesApi({ game: "derby", op: "cast" });
+      return { bite: c.bite, reel: async (react) => {
+        const r = await gamesApi({ game: "derby", op: "reel", cid: c.cid, react });
+        games.derby = r.derby;
+        const x = r.cast;
+        return x.f ? { catch: x.f, rarity: x.rarity, pts: x.pts, cm: x.cm, lucky: x.lucky, quick: x.quick, derby: true, who: me } : { catch: null, miss: x.miss, derby: true, who: me };
+      } };
+    };
+    try {
+      const res = R && R.fish ? await R.fish(me, request, { derby: true, stay: true, local: true }) : null;
+      if (!res && R && R.fish) say("鱼竿还在水里呢～");
+      else if (!res && !(R && R.fish)) { // 没有 3D：直接走一遍
+        const c = await request(); await new Promise((r) => setTimeout(r, c.bite)); const x = await c.reel(600); derbyToast(x, me);
+      } else if (res && res.error) say("没甩出去（" + res.error + "）");
+    } catch (e) { say("鱼跑了…网络好像不太好 😢"); }
+    derbyBusy = false;
+    await loadGames(); loadWallet();
+    const d = games.derby;
+    if (d && d.status === "live" && d.p[me].casts.length >= d.max && R && R.leaveDock) setTimeout(() => R.leaveDock(me), 2500);
+  }
+  function derbyToast(d, who) {
+    if (!d.catch) { say(`${who === me ? "" : whoName(who)}${d.miss === "early" ? "拉早了，空竿 💨" : "拉慢了，鱼跑了 💨"}`); return; }
+    const c = FISHN(d.catch);
+    say(`${who === me ? "" : whoName(who) + " "}${c[1]} ${c[0]} ${d.cm ? d.cm + "cm · " : ""}+${d.pts} 分${d.quick ? " ⚡快手" : ""}${d.lucky ? " 🍀幸运鱼 ×2" : ""}`);
+  }
+
+  // ---------------- 默契大考验
+  function renderQuiz() {
+    const q = games.quiz, el = $("#gbody"), on = otherName();
+    let s = `<p class="sub">每天 5 道题：先选<b>你自己</b>的答案，再猜<b>${on}</b>会选什么。两个人都交卷才揭晓，猜中一题 +1 默契，满分 10。累计默契 <b>${q.total}</b>（${q.rounds} 天）</p>`;
+    if (!q.mine) {
+      quizDraft ||= { self: [null, null, null, null, null], guess: [null, null, null, null, null], day: q.day };
+      if (quizDraft.day !== q.day) quizDraft = { self: [null, null, null, null, null], guess: [null, null, null, null, null], day: q.day };
+      s += q.questions.map((it, i) => `<div class="qz"><p class="qa-q">${i + 1}. ${esc(it.q)}</p>
+        <div class="qrow"><small>我选</small>${it.opts.map((o, j) => `<button type="button" data-qz="self" data-i="${i}" data-j="${j}" class="${quizDraft.self[i] === j ? "on" : ""}">${esc(o)}</button>`).join("")}</div>
+        <div class="qrow"><small>猜${on}</small>${it.opts.map((o, j) => `<button type="button" data-qz="guess" data-i="${i}" data-j="${j}" class="${quizDraft.guess[i] === j ? "on g" : ""}">${esc(o)}</button>`).join("")}</div></div>`).join("");
+      const done = quizDraft.self.every((x) => x != null) && quizDraft.guess.every((x) => x != null);
+      s += `<div class="row"><button class="bigbtn" data-qz="submit" ${done ? "" : "disabled"}>交卷 💞</button><span class="sub">${q.theirsDone ? `${on}已经交卷了，就等你 👀` : `${on}还没交卷`}</span></div>`;
+    } else if (!q.result) {
+      s += `<p class="gres">交卷啦！等${on}交卷就揭晓 ⏳</p>`;
+    } else {
+      const r = q.result, mine = q.mine, theirs = q.theirs;
+      s += `<div class="qscore"><b>${r.score}</b><span>/10 默契</span><small>${r.same} 题你们选的一模一样</small></div>`;
+      s += q.questions.map((it, i) => {
+        const a = mine.self[i], b = theirs.self[i], ga = mine.guess[i], gb = theirs.guess[i];
+        return `<div class="qz done"><p class="qa-q">${i + 1}. ${esc(it.q)}</p>
+          <div class="qrev"><span>我：<b>${esc(it.opts[a])}</b></span><span>${on}猜我：${esc(it.opts[gb])} ${gb === a ? "✅" : "❌"}</span></div>
+          <div class="qrev"><span>${on}：<b>${esc(it.opts[b])}</b></span><span>我猜${on}：${esc(it.opts[ga])} ${ga === b ? "✅" : "❌"}</span></div></div>`;
+      }).join("");
+    }
+    const hist = (q.hist || []).slice(-7).reverse().filter((x) => x.day !== q.day);
+    if (hist.length) s += `<div class="ghist"><p class="sub">最近几天</p>${hist.map((x) => `<div>${x.day.slice(5)} · 默契 ${x.score}/10 · 同款 ${x.same}</div>`).join("")}</div>`;
+    el.innerHTML = s;
+  }
+  async function quizSubmit() {
+    if (!quizDraft) return;
+    try {
+      const r = await gamesApi({ game: "quiz", op: "submit", self: quizDraft.self, guess: quizDraft.guess });
+      games.quiz = r.quiz; quizDraft = null;
+      if (r.result) { say(`💞 默契 ${r.result.score}/10！小岛 +${r.result.stars} ⭐`); burst(); loadWallet(); }
+      else say(`交卷啦，等${otherName()}～`);
+      sfx("chime"); renderGames(); syncGames3d();
+    } catch (e) { say("没交上（" + e.message + "）"); }
+  }
+
+  // ---------------- 愿望券
+  async function renderWish() {
+    const el = $("#gbody"), list = games.wishes || [];
+    let s = `<p class="sub">小游戏的赢家拿到一张愿望券：写下一个愿望（比如「周末陪我看一部电影」），输的人兑现以后点「已兑现」。</p>`;
+    if (!list.length) s += `<p class="gres">还没有愿望券，去玩一局吧～</p>`;
+    const rows = await Promise.all(list.map(async (w) => {
+      const src = SRC[(w.source || "").split(":")[0]] || "小游戏", mineW = w.who === me;
+      const head = `<small>🎟 ${src} · ${new Date(w.ts).toLocaleDateString()} · ${mineW ? "我赢的" : whoName(w.who) + "赢的"}</small>`;
+      if (!w.wish) return `<div class="wish">${head}${mineW ? `<form class="wish-form" data-grant="${w.id}"><input maxlength="80" placeholder="写一个愿望给${otherName()}…" required><button type="submit">写好了</button></form>` : `<p class="sub">等${whoName(w.who)}写愿望…</p>`}</div>`;
+      const text = await open(w.wish.box);
+      return `<div class="wish ${w.done ? "done" : ""}">${head}<p class="wtext">「${esc(text)}」</p>${w.done ? `<p class="sub">✅ 已兑现</p>` : mineW ? `<p class="sub">等${otherName()}兑现 ⏳</p>` : `<button type="button" class="mini-btn" data-wishdone="${w.wish.id}">✓ 我兑现了</button>`}</div>`;
+    }));
+    el.innerHTML = s + rows.join("");
+  }
+
+  root.addEventListener("click", async (ev) => {
+    const b = ev.target.closest("button");
+    if (!b) return;
+    if (b.dataset.gtab) { gameTab = b.dataset.gtab; renderGames(); return; }
+    if (b.dataset.hunt) {
+      const k = b.dataset.hunt;
+      if (k === "hide") startHunt("hide");
+      else if (k === "seek") startHunt("seek");
+      else if (k === "stop") { stopHunt(); if (panel === "games") renderGames(); }
+      else if (k === "confirm") confirmHide();
+      else if (k === "cancel") { try { await gamesApi({ game: "hunt", op: "cancel" }); await loadGames(); } catch (e) { say(e.message); } }
+      return;
+    }
+    if (b.dataset.derby) {
+      const k = b.dataset.derby;
+      if (k === "challenge") { try { await gamesApi({ game: "derby", op: "challenge" }); say(`🎣 已经向${otherName()}发起钓鱼大赛！`); sfx("chime"); await loadGames(); } catch (e) { say("没发起成功（" + e.message + "）"); } }
+      else if (k === "cast") derbyCast();
+      else if (k === "quit") { if (!confirm("真的要认输吗？对方直接赢走愿望券哦")) return; try { await gamesApi({ game: "derby", op: "quit" }); await loadGames(); } catch (e) { say(e.message); } }
+      return;
+    }
+    if (b.dataset.qz) {
+      if (b.dataset.qz === "submit") { quizSubmit(); return; }
+      quizDraft[b.dataset.qz][+b.dataset.i] = +b.dataset.j;
+      renderQuiz();
+      return;
+    }
+    if (b.dataset.wishdone) {
+      try { await post({ kind: "wishdone", item: b.dataset.wishdone }); say("兑现啦 ✅"); sfx("chime"); await loadGames(); } catch (e) { say("没提交上 😢"); }
+    }
+  });
+  root.addEventListener("submit", async (ev) => {
+    const f = ev.target.closest(".wish-form");
+    if (!f) return;
+    ev.preventDefault();
+    const text = f.querySelector("input").value.trim();
+    if (!text) return;
+    try { await post({ kind: "wish", item: f.dataset.grant, box: await seal(text) }); say("愿望写好啦 🎟"); sfx("chime"); await loadGames(); }
+    catch { say("没写上，网络好像不太好 😢"); }
+  });
+  function gameCard(emoji, title, line1, line2) {
+    const card = document.createElement("div");
+    card.className = "catch-card r-epic";
+    card.innerHTML = `<div class="cc-in"><div class="cc-emo">${emoji}</div><b>${esc(title)}</b><p class="gain" style="font-size:14px">${esc(line1)}</p>${line2 ? `<p class="bottle">${esc(line2)}</p>` : ""}<button>好耶</button></div>`;
+    document.body.appendChild(card);
+    card.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON" || e.target === card) card.remove(); });
+    setTimeout(() => card.remove(), 20000);
+  }
+
   /* ------------------------------------------------------------ 实时连接（WebSocket）：走路、在线、新动态秒级同步；断了就靠 12 秒轮询兜底 */
   const RT = () => window.NEST_RT;
   const rtLive = () => !!(RT() && RT().connected);
@@ -943,6 +1301,8 @@
     loadWallet();
     addEventListener("nest:3dready", applyWallet);
     if (window.NEST3D && window.NEST3D.extrasReady) window.NEST3D.extrasReady.then(() => { applyWallet(); syncWorld(); });
+    if (window.NEST3D && window.NEST3D.playReady) window.NEST3D.playReady.then(() => syncGames3d());
+    loadGames();
     loadWorld();
     setInterval(() => { if (!document.hidden) loadWorld(); }, 15 * 60000);
     startRealtime().catch(() => {});

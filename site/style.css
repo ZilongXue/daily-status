@@ -330,3 +330,47 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 .edit-bar span { font-size: 13px; color: var(--muted); }
 .edit-bar button { font: inherit; font-weight: 700; border: 0; border-radius: 12px; padding: 8px 12px; background: #f6efe9; cursor: pointer; }
 .edit-bar button.primary { background: #ffd1dc; }
+
+/* v12 小游戏 */
+.gtabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; margin-bottom: 8px; }
+.gtabs::-webkit-scrollbar { display: none; }
+.gtabs button { flex: 0 0 auto; font: inherit; font-weight: 700; font-size: 13px; border: 0; border-radius: 999px; padding: 6px 12px; cursor: pointer; background: #fff8f2; color: var(--muted); position: relative; }
+.gtabs button.on { background: #ffe0ea; color: inherit; }
+.gtabs .dot { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; border-radius: 8px; background: #ff6b8b; color: #fff; font-size: 11px; font-style: normal; line-height: 16px; text-align: center; }
+.gres { font-weight: 700; margin: 6px 0; line-height: 1.5; }
+.ghist { margin-top: 10px; border-top: 1px dashed #ead8ca; padding-top: 6px; font-size: 13px; color: var(--muted); }
+.ghist div { margin: 3px 0; }
+.mini-btn { font: inherit; font-size: 12.5px; font-weight: 700; border: 0; border-radius: 10px; padding: 6px 10px; cursor: pointer; background: #fff; box-shadow: 0 2px 0 #f1d5c4; color: var(--muted); }
+.digs { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.dig { font-size: 12.5px; font-weight: 700; padding: 4px 8px; border-radius: 999px; background: #eef4ff; }
+.dig.b-hot { background: #ffe1d9; color: #d4452b; } .dig.b-warm { background: #fff0d6; color: #c47a0a; }
+.dig.b-cool { background: #e5f2ff; color: #3a7ac0; } .dig.b-cold { background: #e3e9fb; color: #3c55a8; } .dig.b-found { background: #fff3c4; color: #a87b00; }
+.hint { font-size: 13.5px; margin: 4px 0; color: #8a5a2b; }
+.game-bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 40; width: min(560px, calc(100vw - 24px)); box-sizing: border-box;
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 16px; background: rgba(255, 252, 248, .97); box-shadow: 0 6px 24px rgba(90, 60, 40, .22); font-size: 14px; }
+.game-bar span { flex: 1 1 180px; line-height: 1.45; }
+.game-bar input { flex: 1 1 160px; min-width: 0; border: 2px solid #f3dfd2; border-radius: 10px; padding: 6px 8px; font: inherit; font-size: 13.5px; }
+.game-bar button { font: inherit; font-weight: 700; font-size: 13.5px; border: 0; border-radius: 10px; padding: 8px 12px; cursor: pointer; background: #fff; box-shadow: 0 2px 0 #f1d5c4; }
+.game-bar button.primary { background: linear-gradient(135deg, #ffd1dc, #ffe9a8); }
+.derby { background: #fff8f2; border-radius: 14px; padding: 8px 10px; margin: 6px 0; }
+.drow { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.drow > b:first-child { width: 70px; flex: 0 0 auto; font-size: 13.5px; }
+.drow .dots { display: flex; gap: 4px; flex: 1; }
+.drow .dots i { width: 26px; height: 26px; border-radius: 50%; background: #f1e4d8; font-style: normal; font-size: 15px; line-height: 26px; text-align: center; }
+.drow .dots i.hit { background: #e3f6ff; } .drow .dots i.miss { background: #f3f0ee; }
+.drow .pts { font-size: 22px; min-width: 48px; text-align: right; }
+.qz { background: #fff8f2; border-radius: 14px; padding: 8px 10px; margin: 8px 0; }
+.qz .qa-q { font-size: 15px; margin: 2px 0 6px; }
+.qrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
+.qrow small { width: 46px; color: var(--muted); font-weight: 700; }
+.qrow button { font: inherit; font-size: 13px; border: 0; border-radius: 999px; padding: 5px 10px; cursor: pointer; background: #fff; box-shadow: 0 1px 0 #f1d5c4; }
+.qrow button.on { background: #ffd1dc; font-weight: 700; } .qrow button.on.g { background: #d9ecff; }
+.qrev { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13.5px; margin: 3px 0; }
+.qscore { text-align: center; margin: 6px 0 10px; } .qscore b { font-size: 44px; color: #e2557c; } .qscore span { font-weight: 700; margin-left: 4px; } .qscore small { display: block; color: var(--muted); }
+.wish { background: #fff8f2; border-radius: 14px; padding: 8px 10px; margin: 8px 0; border: 2px dashed #f2c7a8; }
+.wish.done { opacity: .65; border-style: solid; }
+.wish small { color: var(--muted); font-weight: 700; }
+.wish .wtext { font-size: 15px; font-weight: 700; margin: 6px 0; }
+.wish-form { display: flex; gap: 6px; margin-top: 6px; }
+.wish-form input { flex: 1; min-width: 0; border: 2px solid #f3dfd2; border-radius: 10px; padding: 6px 8px; font: inherit; }
+.wish-form button { font: inherit; font-weight: 700; border: 0; border-radius: 10px; padding: 6px 12px; cursor: pointer; background: linear-gradient(135deg, #ffd1dc, #ffe9a8); }

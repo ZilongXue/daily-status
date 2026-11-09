@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Games preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #d4f0fb; font: 14px system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; align-items: center; }
+  button { border: 1px solid #b9cfd8; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  button.on { background: #ffe3a8; }
+  label { background: #fff; border: 1px solid #b9cfd8; border-radius: 8px; padding: 3px 8px; display: flex; gap: 4px; align-items: center; }
+  input[type=range] { width: 90px; }
+  input[type=text] { width: 110px; }
+  #stat { position: fixed; top: 6px; left: 8px; font-size: 12px; color: #456; background: rgba(255,255,255,.7); padding: 4px 8px; border-radius: 6px; white-space: pre; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stat"></div>
+<div class="bar" id="bar"></div>
+<script type="module">
+// ?focus=chest|dig|shovel|trophy|board|jar|marker 近景看一个；?dusk 黄昏光；?still 不自动演示
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { buildChest, buildDigMound, buildShovel, buildTrophy, buildScoreboard, buildHeartJar, buildHideMarker } from "./games3d.js";
+
+const params = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xd4f0fb);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+// 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.userData.outline = thickness;
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+const T = { toon, outlined };
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(4, 8, 5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 0.5, far: 30 });
+sun.shadow.bias = -0.0005;
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+function setDusk(on) {
+  hemi.color.set(on ? 0xffb38a : 0xe3f4ff); hemi.groundColor.set(on ? 0x5a4a6a : 0x76a060); hemi.intensity = on ? 0.9 : 1.8;
+  sun.color.set(on ? 0xff9a5a : 0xffffff); sun.intensity = on ? 1.1 : 2.2; sun.position.set(on ? -6 : 4, on ? 2.2 : 8, 5);
+  fill.intensity = on ? 0.25 : 0.5;
+  renderer.setClearColor(on ? 0xe8a58f : 0xd4f0fb);
+}
+
+// 草地
+const grass = new THREE.Mesh(new THREE.CircleGeometry(9, 48).rotateX(-Math.PI / 2), toon(0x9ad978));
+grass.receiveShadow = true;
+scene.add(grass);
+
+function label(text, color = "#7aa36a", w = 0.5) {
+  const cv = document.createElement("canvas");
+  cv.width = 256; cv.height = 72;
+  const g = cv.getContext("2d");
+  g.fillStyle = color;
+  g.beginPath(); g.roundRect(6, 6, 244, 60, 28); g.fill();
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = "bold 30px system-ui, 'PingFang SC', sans-serif";
+  g.fillText(text, 128, 38);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+  sp.scale.set(w, w * 72 / 256, 1);
+  return sp;
+}
+
+// ---- 一排道具
+const chest = buildChest(T);
+const dig = buildDigMound(T);
+const shovel = buildShovel(T);
+const trophy = buildTrophy(T);
+const board = buildScoreboard(T);
+const jar = buildHeartJar(T);
+const marker = buildHideMarker(T);
+const items = [
+  ["chest", "宝箱", chest, -3.3, 0.5],
+  ["dig", "土堆", dig, -2.25, 0.36],
+  ["shovel", "铲子", shovel, -1.45, 0.39],
+  ["trophy", "奖杯", trophy, -0.75, 0.41],
+  ["board", "记分牌", board, 0.45, 1.0],
+  ["jar", "爱心罐", jar, 1.6, 0.38],
+  ["marker", "藏宝标记", marker, 2.5, 0.05],
+];
+for (const [id, name, o, x, h] of items) {
+  o.root.position.x = x;
+  scene.add(o.root);
+  const lb = label(name, "#c6956a", 0.42);
+  lb.position.set(x, h + 0.2, 0);
+  lb.userData.noShadow = true;
+  scene.add(lb);
+}
+// 铲子插在土里：铲头一半埋进去
+shovel.root.position.y = 0.34;
+shovel.root.rotation.set(0.12, -0.5, 0.1);
+// 地上再放一把横着的
+const shovel2 = buildShovel(T);
+shovel2.root.position.set(-1.35, 0.022, 0.42);
+shovel2.root.rotation.set(Math.PI / 2, 0, 1.2);
+scene.add(shovel2.root);
+board.root.rotation.y = 0;
+chest.root.rotation.y = 0.25;
+jar.root.rotation.y = -0.15;
+trophy.root.rotation.y = 0.1;
+
+scene.traverse((o) => { if (o.isMesh && !o.material.side && !o.userData.noShadow && !o.material.transparent) o.castShadow = true; });
+
+// ---- 统计
+const tris = (o) => { let n = 0; o.traverse((m) => { if (m.isMesh && m.geometry) { const g = m.geometry; n += (g.index ? g.index.count : g.attributes.position.count) / 3; } }); return Math.round(n); };
+const meshes = (o) => { let n = 0; o.traverse((m) => { if (m.isMesh || m.isSprite) n++; }); return n; };
+const statLine = items.map(([id, , o]) => `${id}:${tris(o.root)}t/${meshes(o.root)}m`).join("  ");
+console.log("tris/meshes (incl. outlines)", statLine);
+const box = new THREE.Box3();
+for (const [id, , o] of items) { box.setFromObject(o.root); const s = box.getSize(new THREE.Vector3()); console.log(id, "size", s.toArray().map((v) => v.toFixed(3)).join(" x ")); }
+
+// ---- 示例数据
+const SAMPLES = [
+  { title: "钓鱼大赛", rows: [{ name: "他", emoji: "🐻", pts: 12, casts: 3, max: 5 }, { name: "她", emoji: "🐰", pts: 18, casts: 4, max: 5 }], lucky: { emoji: "🐟", name: "小丑鱼" }, status: "进行中", winner: null },
+  { title: "钓鱼大赛", rows: [{ name: "玩家1", emoji: "🐻", pts: 26, casts: 5, max: 5 }, { name: "玩家2", emoji: "🐰", pts: 31, casts: 5, max: 5 }], lucky: { emoji: "🐠", name: "热带鱼", mult: 3 }, status: "已结束", winner: 1 },
+  { title: "周末钓鱼大赛", rows: [{ name: "他", emoji: "🐻", pts: 0, casts: 0, max: 8 }, { name: "她", emoji: "🐰", pts: 105, casts: 7, max: 8 }], lucky: null, status: "", winner: 0 },
+];
+let si = +(params.get("scores") ?? 1);
+board.setScores(SAMPLES[si]);
+const LABELS = ["钓鱼大赛冠军", "冠军", "第 3 届钓鱼大赛 · 冠军"];
+let li = 0;
+trophy.setLabel(LABELS[0]);
+let fillK = +(params.get("fill") ?? 0.37);
+jar.setFill(fillK);
+jar.setLabel(`默契 ${Math.round(fillK * 100)}`);
+
+// ---- 按钮
+const bar = document.getElementById("bar");
+const btn = (text, fn) => { const b = document.createElement("button"); b.textContent = text; b.onclick = () => fn(b); bar.appendChild(b); return b; };
+const slider = (text, v, fn) => {
+  const l = document.createElement("label"); l.textContent = text;
+  const r = document.createElement("input"); r.type = "range"; r.min = 0; r.max = 1; r.step = 0.01; r.value = v;
+  r.oninput = () => fn(+r.value); l.appendChild(r); bar.appendChild(l); return r;
+};
+let openTarget = params.has("open") ? 1 : 0, openK = openTarget;
+let auto = !params.has("still");
+btn("🧰 开/关", () => { openTarget = openTarget > 0.5 ? 0 : 1; auto = false; });
+const openSlider = slider("开", openK, (v) => { openK = openTarget = v; auto = false; });
+const BANDS = ["hot", "warm", "cool", "cold", "found"];
+let bi = 0;
+const bandBtn = btn(`🚩 ${BANDS[bi]}`, (b) => { bi = (bi + 1) % BANDS.length; dig.setBand(BANDS[bi]); b.textContent = `🚩 ${BANDS[bi]}`; });
+dig.setBand(params.get("band") || BANDS[bi]);
+btn("💥 pop", () => dig.pop(clock.elapsedTime));
+btn("🏆 换字", () => { li = (li + 1) % LABELS.length; trophy.setLabel(LABELS[li]); });
+const tIn = document.createElement("input"); tIn.type = "text"; tIn.placeholder = "奖杯字"; tIn.onchange = () => trophy.setLabel(tIn.value); bar.appendChild(tIn);
+btn("📋 换分数", () => { si = (si + 1) % SAMPLES.length; board.setScores(SAMPLES[si]); });
+slider("💗", fillK, (v) => { jar.setFill(v); jar.setLabel(`默契 ${Math.round(v * 100)}`); });
+let dusk = params.has("dusk");
+setDusk(dusk);
+btn("🌇 黄昏", (b) => { dusk = !dusk; setDusk(dusk); b.classList.toggle("on", dusk); });
+window.props = { chest, dig, shovel, trophy, board, jar, marker, setDusk, now: () => clock.elapsedTime };
+
+// ---- 相机
+const focus = params.get("focus");
+function place() {
+  const tn = Math.tan(THREE.MathUtils.degToRad(16));
+  let W = 6.6, H = 1.5, tgt = new THREE.Vector3(-0.4, 0.38, 0), elev = 0.36;
+  const it = items.find((x) => x[0] === focus);
+  if (it) { const h = Math.max(0.3, it[4]); W = Math.max(1.0, h * 1.9); H = h * 1.7; tgt = new THREE.Vector3(it[3], h * 0.48, 0); elev = it[0] === "marker" ? 0.9 : 0.32; }
+  const dist = Math.max(H / (2 * tn), W / (2 * tn * camera.aspect));
+  controls.target.copy(tgt);
+  camera.position.set(tgt.x, tgt.y + Math.sin(elev) * dist, tgt.z + Math.cos(elev) * dist);
+  controls.update();
+}
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  place();
+}
+addEventListener("resize", resize);
+resize();
+
+const clock = new THREE.Clock();
+let frames = 0, fpsT = 0, autoT = 0;
+const st = document.getElementById("stat");
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta());
+  const t = clock.elapsedTime;
+  // 自动演示：宝箱每 5 秒开 / 关，土堆每 3 秒 pop 一次并换颜色
+  if (auto) {
+    autoT += dt;
+    if (Math.floor(autoT / 5) !== Math.floor((autoT - dt) / 5)) openTarget = openTarget > 0.5 ? 0 : 1;
+    if (Math.floor(autoT / 3) !== Math.floor((autoT - dt) / 3)) { bi = (bi + 1) % BANDS.length; dig.setBand(BANDS[bi]); bandBtn.textContent = `🚩 ${BANDS[bi]}`; dig.pop(t); }
+  }
+  openK += (openTarget - openK) * Math.min(1, dt * 4);
+  chest.setOpen(openK);
+  openSlider.value = openK;
+  chest.update(t, dt);
+  dig.update(t, dt);
+  trophy.update(t, dt);
+  jar.update(t, dt);
+  marker.update(t);
+  frames++; fpsT += dt;
+  if (fpsT > 1) { st.textContent = `${Math.round(frames / fpsT)} fps · ${renderer.info.render.calls} draws · ${Math.round(renderer.info.render.triangles)} tris\n${statLine}`; frames = 0; fpsT = 0; }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

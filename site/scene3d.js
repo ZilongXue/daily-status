@@ -4,11 +4,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=11";
-import { buildDino } from "./dino3d.js?v=11";
-import { createDecor, encodePos } from "./decor3d.js?v=11";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=11";
-import { createBatcher } from "./batch3d.js?v=11";
+import { buildPet, SPECIES } from "./pet3d.js?v=12";
+import { buildDino } from "./dino3d.js?v=12";
+import { createDecor, encodePos } from "./decor3d.js?v=12";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=12";
+import { createBatcher } from "./batch3d.js?v=12";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -370,7 +370,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=11")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=12")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -472,6 +472,16 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
   }
 });
 function stopHold() { holding = false; }
+let tapMode = null;
+const tapPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function groundPoint(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (!ray.ray.intersectPlane(tapPlane, hit)) return null;
+  return world.worldToLocal(hit);
+}
 addEventListener("pointerup", () => { clearTimeout(holdTimer); if (holding) { stopHold(); downAt = null; } });
 renderer.domElement.addEventListener("pointerup", (e) => {
   if (edit) { editUp(); return; }
@@ -480,6 +490,11 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   downAt = null;
   if (moved) return;
   if (cast && cast.pull()) return;
+  if (tapMode) { // 小游戏（藏宝）：点到哪就是草地上的哪一点，不管点中的是树还是装饰
+    const p = groundPoint(e);
+    if (p) tapMode(walkable(p), { x: e.clientX, y: e.clientY });
+    return;
+  }
   const hit = pick(e);
   if (!hit) return;
   const what = hit.object.userData.what;
@@ -550,6 +565,7 @@ function animate(t, dt) {
   W.update(t, dt);
   if (cast) cast.update(t, dt, skyKind, world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())));
   if (extras) extras.update(t, dt);
+  if (play) play.update(t, dt);
   decor.update(t, dt, skyKind === "night" || skyKind === "dusk");
   if (!pet) return;
   const P = pet, sleep = mood === "sleep";
@@ -863,7 +879,7 @@ document.querySelectorAll("[data-species]").forEach((b) => b.addEventListener("c
 }));
 
 /* ---------------------------------------------------------------- 她的小猫 + 小马、钓鱼（cast3d.js，加载失败也不影响别的） */
-let cast = null, extras = null;
+let cast = null, extras = null, play = null;
 const dinoApi = {
   root: () => pet.root, parts: () => pet, scale: () => PET_SCALE, home: () => home.clone(),
   sleeping: () => mood === "sleep",
@@ -874,7 +890,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=11").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=12").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -929,14 +945,15 @@ window.NEST3D = {
   castReady,
   play: (kind, who, item) => (cast ? cast.play(kind, who, item) : Promise.resolve()),
   setHer: (st) => cast && cast.setState(st),
-  fish: (who, request) => (cast ? cast.fish(who, request) : request()),
+  fish: (who, request, opts) => (cast ? cast.fish(who, request, opts) : opts && opts.derby ? Promise.resolve(null) : request()),
+  leaveDock: (who) => cast && cast.leaveDock(who),
   pullFish: () => cast && cast.pull(),
-  fishing: () => !!(cast && cast.fishing()),
+  fishing: (actor) => !!(cast && cast.fishing(actor)),
   setBook: (b) => cast && cast.setBook(b),
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=11");
+      const { createExtras } = await import("./extras3d.js?v=12");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;
@@ -949,6 +966,25 @@ window.NEST3D = {
   setOutfits: (m) => extras && extras.setOutfits(m),
   setWorld: (st) => extras && extras.setWorld(st),
   setDecorPos: (m) => decor.setPositions(m),
+  // 小游戏：藏宝 / 钓鱼大赛 / 默契罐
+  playReady: castReady.then(async (c) => {
+    if (!c) return null;
+    try {
+      const { createPlay } = await import("./play3d.js?v=12");
+      play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
+      castShadows();
+    } catch (e) { console.warn("play3d", e); }
+    return play;
+  }),
+  setGames: (g, me, names) => play && play.setGames(g, me, names),
+  setTapMode(fn) { tapMode = fn || null; if (fn) controls.autoRotate = false; else resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000); },
+  localDig: (who, x, z, resultP) => (play ? play.localDig(who, x, z, resultP) : resultP),
+  digAt: (who, x, z) => (play ? play.digAt(who, x, z) : Promise.resolve()),
+  remoteDigs: (who, list, end) => (play ? play.remoteDigs(who, list, end) : Promise.resolve()),
+  revealChest: (x, z, o) => (play ? play.revealChest(x, z, o) : Promise.resolve()),
+  buryChest: (who, x, z) => (play ? play.buryChest(who, x, z) : Promise.resolve()),
+  previewHide: (p) => play && play.previewHide(p),
+  screenAt: (x, y, z) => screenOf(world.localToWorld(new THREE.Vector3(x, y, z))), // 小岛坐标 → 屏幕坐标
   editStart() { edit = { sel: null, drag: false, changed: {} }; controls.autoRotate = false; },
   editRotate() { if (edit && edit.sel) { edit.sel.rotation.y += Math.PI / 4; edit.changed[edit.sel.userData.item] = true; } },
   editStop() {
