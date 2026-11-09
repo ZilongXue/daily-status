@@ -45,6 +45,13 @@ async function line(e, rawKey, n) {
   if (e.kind === "quiz") return `💞 ${n}交了今天的默契大考验，你也来答吧`;
   if (e.kind === "wish") return `🎟 ${n}写好了一张愿望券，记得兑现哦`;
   if (e.kind === "wishdone") return `✅ ${n}兑现了你的愿望券`;
+  if (e.kind === "hatch") return `🐣 ${n}孵出了一只新宠物！`;
+  if (e.kind === "photo") return `📷 ${n}在小岛上拍了一张照片`;
+  if (e.kind === "visit") return `🦊 ${n}帮岛民完成了心愿`;
+  if (e.kind === "voyage" || e.kind === "sail") return e.kind === "sail" ? `⛵ ${n}派小船出海了` : `⛵ 小船回来了，带回了好多东西`;
+  if (e.kind === "evt") return { typhoon: `🌀 台风来了！${n}正在加固小岛，快来帮忙`, parrot: `🦜 ${n}在赶偷东西的鹦鹉`, meteor: `🌠 小岛下流星雨了`, lowtide: `🐚 退潮了，沙滩上好多贝壳`, whale: `🐋 鲸鱼游到码头边了！` }[e.item] || null;
+  if (e.kind === "cook") return `🍳 ${n}在小屋做了一道菜`;
+  if (e.kind === "claim") return `📖 图鉴解锁了新奖励`;
   if (e.kind === "note") { const t = rawKey && e.box ? await openNote(e.box, rawKey) : null; return t ? `${n}的纸条：「${t}」` : `${n}给你留了一张纸条 💌`; }
   return null;
 }

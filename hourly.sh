@@ -15,3 +15,4 @@ echo "=== $(date '+%Y-%m-%d %H:%M:%S')"
 "$PY" "$HOME/Documents/health/whoop/whoop.py" sync || { notify "WHOOP 同步失败"; exit 1; }
 "$PY" "$HOME/Documents/whoop-status-page/publish.py" || { notify "状态页发布失败"; exit 1; }
 "$PY" "$HOME/Documents/whoop-status-page/stars.py" || notify "星星结算失败"
+"$PY" "$HOME/Documents/whoop-status-page/backup.py" || notify "小窝数据备份失败"

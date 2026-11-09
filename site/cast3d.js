@@ -1,8 +1,11 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=14";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=14";
+import { buildFish } from "./fishgen3d.js?v=15";
+import { FISH } from "./fishdata.js?v=15";
+import { POOL } from "./island3d.js?v=15";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=15";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=15";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
@@ -366,10 +369,21 @@ export function createCast(ctx) {
     sl.local = opts.local !== false;
     if (who === "her" && S.riding) seatKitten(false);
     const go = (p) => (who === "her" ? move(her, p, 2.4) : dino.go(p));
-    const faceSea = () => sl.stand.clone().add(DOCK.dir);
+    // 瀑布下的水潭（v15）：站在水潭靠草地这一边，浮漂落在水潭中间；钓完直接走回家
+    const pool = opts.spot === "pool" && !opts.derby;
+    if (pool && !sl.dockStand) {
+      sl.dockStand = sl.stand; sl.dockBob = sl.bobTo;
+      const toC = new THREE.Vector3(-POOL.x, 0, -POOL.z).normalize();
+      const side = new THREE.Vector3(-toC.z, 0, toC.x).multiplyScalar(who === "her" ? -0.22 : 0.22);
+      sl.stand = new THREE.Vector3(POOL.x, 0, POOL.z).addScaledVector(toC, POOL.r + 0.42).add(side);
+      sl.stand.y = Math.max(0, W.heightAt(sl.stand.x, sl.stand.z));
+      sl.bobTo = new THREE.Vector3(POOL.x, -0.1, POOL.z).addScaledVector(toC, 0.08).add(side);
+      sl.atPool = true;
+    }
+    const faceSea = () => (sl.atPool ? sl.bobTo.clone().setY(sl.stand.y) : sl.stand.clone().add(DOCK.dir));
     if (who === "her") her.face = null; else dino.face(null);
     const res = opts.derby ? null : request();
-    if (!sl.atDock) { await go(DOCK.base); await go(sl.stand); sl.atDock = true; }
+    if (!sl.atDock) { if (!sl.atPool) await go(DOCK.base); await go(sl.stand); sl.atDock = true; }
     if (who === "her") her.face = faceSea; else dino.face(faceSea);
     holdRod(sl);
     await wait(0.3);
@@ -418,7 +432,7 @@ export function createCast(ctx) {
     }
     sl.state = "reeling";
     sl.reelT = T;
-    const it = buildCatch(result.catch, { toon, outlined });
+    const it = buildFish(result.catch, { toon, outlined });
     sl.caught = it;
     it.root.position.copy(sl.bobTo);
     world.add(it.root);
@@ -451,8 +465,10 @@ export function createCast(ctx) {
     sl.state = "walking";
     sl.atDock = false;
     const who = sl.actor;
-    if (who === "her") { her.face = null; await move(her, DOCK.base, 2.2); await move(her, HER_HOME, 1.8); }
-    else { dino.face(null); await dino.go(DOCK.base); await dino.go(dino.home()); }
+    const pool = sl.atPool;
+    if (who === "her") { her.face = null; if (!pool) await move(her, DOCK.base, 2.2); await move(her, HER_HOME, 1.8); }
+    else { dino.face(null); if (!pool) await dino.go(DOCK.base); await dino.go(dino.home()); }
+    if (pool) { sl.stand = sl.dockStand; sl.bobTo = sl.dockBob; sl.dockStand = sl.dockBob = null; sl.atPool = false; }
     sl.state = "idle";
   }
   // 比赛结束 / 不钓了：从码头走回家
@@ -523,14 +539,19 @@ export function createCast(ctx) {
 
   /* ------------------------------------------------------------ 浅水区游泳的鱼（钓到过的鱼都会在这里） */
   const swimmers = [];
-  const FISHY = new Set(["crucian", "clown", "puffer", "shrimp", "koi", "jelly", "octopus", "whale", "turtle", "goldkoi"]);
+  // v15：60 种鱼。海里的（码头 / 远洋）在浅水区绕岛游，水潭的在水潭里打转；传说级和物件不出来
+  const swimOk = (id) => FISH[id] && FISH[id].kind === "fish" && FISH[id].rarity !== "legend" && id !== "mermaid";
   function addSwimmer(id) {
-    if (!FISHY.has(id) || swimmers.filter((s) => s.id === id).length >= 2 || swimmers.length >= 14) return;
-    const it = buildCatch(id, { toon, outlined });
-    it.root.scale.setScalar(id === "whale" ? 1.6 : 1.1);
+    if (!swimOk(id) || swimmers.filter((s) => s.id === id).length >= 2) return;
+    const inPool = FISH[id].spot === "pool";
+    if (inPool ? swimmers.filter((s) => s.pool).length >= 4 : swimmers.filter((s) => !s.pool).length >= 14) return;
+    const it = buildFish(id, { toon, outlined });
+    it.root.scale.setScalar(inPool ? 0.42 : id === "whale" ? 1.6 : 1.1);
     it.root.traverse((o) => { o.raycast = () => {}; });
     world.add(it.root);
-    swimmers.push({ id, it, r: 4.75 + Math.random() * 0.9, a: Math.random() * Math.PI * 2, sp: (0.12 + Math.random() * 0.1) * (Math.random() < 0.5 ? -1 : 1), y: id === "jelly" ? -0.12 : -0.2, ph: Math.random() * 6 });
+    swimmers.push(inPool
+      ? { id, it, pool: true, r: 0.12 + Math.random() * 0.22, a: Math.random() * Math.PI * 2, sp: (0.35 + Math.random() * 0.3) * (Math.random() < 0.5 ? -1 : 1), y: -0.16, ph: Math.random() * 6 }
+      : { id, it, r: 4.75 + Math.random() * 0.9, a: Math.random() * Math.PI * 2, sp: (0.12 + Math.random() * 0.1) * (Math.random() < 0.5 ? -1 : 1), y: id === "jelly" ? -0.12 : -0.2, ph: Math.random() * 6 });
   }
   function setBook(book) {
     for (const id of Object.keys(book || {})) {
@@ -709,8 +730,8 @@ export function createCast(ctx) {
     }
     for (const s of swimmers) {
       s.a += s.sp * dt;
-      const x = Math.cos(s.a) * s.r, z = Math.sin(s.a) * s.r;
-      s.it.root.position.set(x, SEA_Y + s.y + Math.sin(t * 1.2 + s.ph) * 0.04, z);
+      const x = Math.cos(s.a) * s.r + (s.pool ? POOL.x : 0), z = Math.sin(s.a) * s.r + (s.pool ? POOL.z : 0);
+      s.it.root.position.set(x, (s.pool ? 0 : SEA_Y) + s.y + Math.sin(t * 1.2 + s.ph) * (s.pool ? 0.015 : 0.04), z);
       // 鱼头朝 +x：转到沿切线方向游
       const dir = Math.sign(s.sp);
       s.it.root.rotation.y = -(s.a + dir * Math.PI / 2);

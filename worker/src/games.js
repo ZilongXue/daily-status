@@ -193,6 +193,7 @@ async function derby(env, b, deps) {
     }
     me.casts.push(rec);
     const eid = await addEvent(env, b.who, "dfish", rec.f || "miss", rec.pts);
+    if (rec.f && deps.onCatch) await deps.onCatch(env, b.who, rec.f, rec.cm, "sea");
     let result = null;
     if (d.p.me.casts.length >= d.max && d.p.her.casts.length >= d.max) result = await derbyFinish(env, d, deps);
     await setMeta(env, "derby", d);

@@ -33,6 +33,7 @@ SITE = ROOT / "site"
 STATE = ROOT / "state"          # gitignored：salt 等本地状态
 SALT_FILE = STATE / "salt.b64"
 ENC = SITE / "data.enc.json"
+FREEZE = ROOT / "state" / "site.freeze"  # 存在时：发布只更新数据，页面代码用 main 上最后提交的版本
 WHOOP = Path.home() / "Documents" / "health" / "whoop"
 EXPORT = WHOOP / "export_status.py"
 STATUS = WHOOP / "data" / "status.json"
@@ -108,7 +109,12 @@ def deploy() -> None:
     """把 site/ 当前内容做成一个没有父提交的提交，强推到 gh-pages。公开历史里永远只有这一份。"""
     with tempfile.TemporaryDirectory() as tmp:
         env = {"GIT_INDEX_FILE": str(Path(tmp) / "index")}
-        git("--work-tree", str(SITE), "add", "-A", "--", ".", ":(exclude,glob)**/.DS_Store", env=env)
+        if FREEZE.exists():
+            # 开发中：页面代码冻结在 main 上最后一次提交的 site/，只更新加密数据
+            git("read-tree", "HEAD:site", env=env)
+            git("--work-tree", str(SITE), "add", "-f", "--", "data.enc.json", env=env)
+        else:
+            git("--work-tree", str(SITE), "add", "-A", "--", ".", ":(exclude,glob)**/.DS_Store", env=env)
         tree = git("write-tree", env=env)
         commit = git("commit-tree", tree, "-m", "update", env=env)
     for attempt in (1, 2):

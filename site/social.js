@@ -29,17 +29,19 @@
     welcome: "开张礼包 🎉", bed: "按时睡觉 🛏", sleep7: "睡够 7 小时 😴", green: "恢复满格 💚", regular: "作息规律 📅",
     active: "今天动起来了 🏸", streak3: "连续 3 晚按时睡 🔥", nudge: "一催就睡 🔔", feed: "今天第一次喂食 🍙",
     notes: "纸条往来 💌", calm: "和好奖励 🌈", fish: "钓鱼收获 🎣", mood: "报心情 💭",
-    qa: "每日一问 📝", hunt: "岛上藏宝 🗺", derby: "钓鱼大赛 🎣", quiz: "默契考验 💞", tuck_me: "盖被子 🛏", tuck_her: "盖被子 🛏", harvest: "菜地收获 🧺", gacha: "扭蛋 🎰",
+    qa: "每日一问 📝", hunt: "岛上藏宝 🗺", derby: "钓鱼大赛 🎣", quiz: "默契考验 💞", tuck_me: "盖被子 🛏", tuck_her: "盖被子 🛏", harvest: "菜地收获 🧺", gacha: "扭蛋 🎰", recipe: "新菜谱 🍳", hatch: "孵出宠物 🐣", visit: "帮岛民 🦊", voyage: "出海归来 ⛵", typhoon: "挡住台风 🌀", parrot: "赶跑鹦鹉 🦜", whale: "鲸鱼的礼物 🐋", repair: "修好装饰 🔨", book: "图鉴奖励 📖", photo: "拍照 📷",
   };
   // 她报的心情、两只角色之间的小动作、钓鱼的奖池（名字和图标；概率和星星以后端为准）
   const MOODS = { happy: ["开心", "😊"], tired: ["累了", "😮‍💨"], miss: ["想你", "🥺"], angry: ["有点气", "😤"], sleepy: ["困了", "😪"] };
   const ACTS = { hug: ["抱抱", "🤗"], pat: ["摸摸头", "🫳"], kiss: ["亲一下", "😘"], highfive: ["击掌", "🙌"], poke: ["戳一戳", "👉"], ride: ["骑小马兜风", "🐴"] };
-  const CATCH = {
+  const CATCH0 = {
     crucian: ["小鲫鱼", "🐟", "common"], clown: ["小丑鱼", "🐠", "common"], puffer: ["河豚", "🐡", "common"], shrimp: ["小虾", "🦐", "common"], boot: ["旧靴子", "🥾", "common"],
     koi: ["锦鲤", "🎏", "rare"], jelly: ["小水母", "🪼", "rare"], octopus: ["小章鱼", "🐙", "rare"], bottle: ["漂流瓶", "🍾", "rare"],
     whale: ["迷你鲸鱼", "🐳", "epic"], turtle: ["小海龟", "🐢", "epic"], chest: ["宝箱", "🎁", "epic"],
     goldkoi: ["金锦鲤", "✨", "legend"], mermaid: ["美人鱼的珍珠", "🦪", "legend"], star: ["坠落的星星", "🌟", "legend"],
   };
+  // v15：60 种鱼的数据在 fishdata.js（life-ui.js 加载后挂到 window.NEST_FISH），这里按 id 查 [名字, 图标, 稀有度]
+  const CATCH = new Proxy(CATCH0, { get: (t, k) => { const F = window.NEST_FISH && window.NEST_FISH[k]; return F ? [F.name, F.emoji, F.rarity] : t[k]; } });
   const RARITY = { common: ["普通", "#8d99a6"], rare: ["稀有", "#2f8fd8"], epic: ["史诗", "#9b59d0"], legend: ["传说", "#e0a000"] };
   const SWEET = ["今天也很想你 💕", "要好好吃饭哦", "等见面那天，一起去海边钓鱼吧 🎣", "你是我钓到过最好的宝贝", "早点睡，梦里见 🌙"];
   // 扭蛋款装饰 / 作物 / 小猫的衣服（名字和图标；概率、价格以后端为准）
@@ -233,7 +235,7 @@
   function fishBtn() {
     const used = (wallet && wallet.casts && wallet.casts[me]) || 0, R = (wallet && wallet.fishRules) || { free: 3, price: 2, max: 10 };
     const sub = used < R.free ? `免费 ${R.free - used} 次` : used < R.max ? `⭐${R.price} 一竿` : "今天钓完啦";
-    return `<button data-act="fish">🎣 钓鱼<small>${sub}</small></button>`;
+    return `<button data-act="fish">🎣 码头钓鱼<small>${sub}</small></button><button data-act="fish-pool">🏞 水潭钓鱼<small>${sub}</small></button>`;
   }
   function herStatus(s, online) {
     const st = s.streak > 1 ? ` · 🌙 晚安连击 ${s.streak} 天` : "";
@@ -303,6 +305,7 @@
       else if (e.kind === "wish") t = `${w}写好了一个愿望 🎟`;
       else if (e.kind === "wishdone") t = `${w}兑现了一个愿望 ✅`;
       else if (e.kind === "rps") { if (e.item === "start") t = `${w}约了一局猜拳 ✊✌️✋${e.n ? "（押愿望券）" : ""}`; else return ""; }
+      else if (window.NEST_LIFE) t = window.NEST_LIFE.line(e, w) || "";
       if (!t) return "";
       const today = dayKey(e.ts) === dayKey(Date.now());
       const tm = today ? ago(new Date(e.ts).toISOString()) : new Date(e.ts).toTimeString().slice(0, 5);
@@ -330,6 +333,7 @@
 
   /* ------------------------------------------------------------ remote events → 动画 */
   async function onRemote(e) {
+    if (window.NEST_LIFE) window.NEST_LIFE.remote(e);
     if (e.who === me) return;
     const R = window.NEST3D;
     const play = (k, item) => (R && R.play ? R.play(k, e.who, item) : null);
@@ -485,6 +489,7 @@
       return;
     }
     if (act === "fish") { goFish(); return; }
+    if (act === "fish-pool") { goFish("pool"); return; }
     if (act === "note") { const f = $("#note-form"); f.hidden = !f.hidden; if (!f.hidden) f.querySelector("textarea").focus(); return; }
     posting = true;
     try {
@@ -564,7 +569,7 @@
   addEventListener("pagehide", flushHits);
 
   /* ------------------------------------------------------------ 钓鱼：结果在后端抽；这里负责甩竿、咬钩、揭晓 */
-  async function goFish() {
+  async function goFish(spot = "sea") {
     const R = window.NEST3D;
     if (fishingNow || (R && R.fishing && R.fishing())) { say("鱼竿还在水里呢～"); return; }
     const used = (wallet && wallet.casts && wallet.casts[me]) || 0, rules = (wallet && wallet.fishRules) || { free: 3, price: 2, max: 10 };
@@ -578,13 +583,13 @@
     fishingNow = true;
     say("走去码头钓鱼啦 🎣");
     const request = async () => {
-      const r = await fetch(API + "/fish", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: me, pay }) });
+      const r = await fetch(API + "/fish", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: me, pay, spot }) });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) return { error: j.error || "api " + r.status };
       return { ...j, who: me };
     };
     try {
-      const res = R && R.fish ? await R.fish(me, request) : await request();
+      const res = R && R.fish ? await R.fish(me, request, { spot }) : await request();
       if (res && res.error) say("鱼跑了…（" + res.error + "）");
       else if (res && !(R && R.fish)) await reveal({ detail: res });
     } catch (e) { say("鱼跑了…网络好像不太好 😢"); }
@@ -618,6 +623,7 @@
     card.innerHTML = `<div class="cc-in"><small style="color:${rar[1]}">${"★".repeat({ common: 1, rare: 2, epic: 3, legend: 4 }[d.rarity] || 1)} ${rar[0]}</small>
       <div class="cc-emo">${c[1]}</div><b>${c[0]}</b>
       ${d.first ? `<p class="first">第一次钓到！收进图鉴 📖</p>` : ""}
+      ${d.cm ? `<p class="muted">${d.cm} cm${d.record ? ` · <b style="color:#e0752d">新纪录！</b>` : ""}${d.bag ? " · 放进背包了 🎒" : ""}</p>` : ""}
       ${d.stars ? `<p class="gain">+${d.stars} ⭐</p>` : ""}${d.pity ? `<p class="muted">（保底）</p>` : ""}${extra}
       <button>收下</button></div>`;
     await new Promise((r) => setTimeout(r, d.rarity === "legend" ? 1800 : 1100)); // 先看 3D 里的鱼出水，再弹卡片
@@ -631,6 +637,7 @@
 
   // 图鉴
   function renderBook() {
+    if (window.NEST_LIFE && window.NEST_LIFE.renderBook) return window.NEST_LIFE.renderBook($("#book"), wallet);
     const book = (wallet && wallet.fishbook) || {};
     const ids = Object.keys(CATCH);
     const got = ids.filter((k) => book[k]).length;
@@ -640,6 +647,14 @@
         : `<div class="item book none"><span class="emo">❔</span><b>？？？</b><small style="color:${RARITY[r][1]}">${RARITY[r][0]}</small></div>`;
     }).join("") + `</div>`;
   }
+
+  // 给 life-ui.js（小岛生活：背包、小屋、宠物、岛民、出海、事件、相册、图鉴）用的桥
+  window.NEST_SOCIAL = {
+    API, me: () => me, token: getToken, seal, open, say, sfx, buzz: (p) => buzz(p), hearts: (x, y, n) => hearts(x, y, n), burst,
+    wallet: () => wallet, loadWallet, poll: () => poll(), HER, whoName: (w) => whoName(w), esc, openPanel: (k) => openPanel(k), panel: () => panel,
+    goFish: (spot) => goFish(spot), PANELS, RARITY, FOODS, GACHA_ITEMS, ITEMS, CROP_INFO,
+  };
+  dispatchEvent(new CustomEvent("nest:social"));
 
   /* ------------------------------------------------------------ 网页推送（Zilong 的安卓 Chrome） */
   function idb() {
@@ -724,7 +739,8 @@
       <li>🏸 今天动起来了 <b>+1</b> · 🔥 连续 3 晚按时睡 <b>+5</b></li>
       <li>🔔 ${HER()}点"该睡觉啦"，他 30 分钟内睡着 <b>+3</b></li>
       <li>🍙 每天第一次喂食 <b>+1</b> · 💌 同一天互相留言 <b>+1</b> · 🌈 吵架后和好 <b>+1</b> · 💭 ${HER()}每天报一次心情 <b>+1</b></li>
-      <li>🎣 钓鱼：每人每天免费 3 竿，钓到锦鲤、鲸鱼、海龟、宝箱和传说级的宝贝都有星星，第一次钓到新东西再 <b>+1</b>（连续 14 竿没出史诗，第 15 竿保底）</li>
+      <li>🎣 钓鱼：每人每天免费 5 竿（码头或瀑布下的水潭），稀有以上有星星，第一次钓到新品种 / 破尺寸纪录各 <b>+1</b>（连续 14 竿没出史诗，第 15 竿保底）</li>
+      <li>🏡 小屋：第一次做出新菜 <b>+2</b> · 🥚 孵出宠物 <b>+3</b> · 🦊 满足岛民的请求 <b>+2～9</b> · ⛵ 出海回来 <b>+2</b> · 🌀 突发事件 <b>+1～8</b> · 📷 每天第一张照片 <b>+1</b></li>
       <li>📝 每日一问两个人都答了 <b>+2</b> · 🛏 给对方盖被子 <b>+1</b> · 🧺 菜地收获 <b>+4～9</b> · 🎰 扭蛋偶尔出星星袋</li>
       <li>🎮 一起玩：✊ 每天第一局猜拳 <b>+1</b> · 🗺 藏宝挖到 <b>+1～8</b>（铲数越少越多）· 🎣 钓鱼大赛比完 <b>+3</b> · 💞 默契考验 <b>+1～5</b> · 🍀 平时钓到今日幸运鱼 <b>+2</b></li></ul>
       <p class="muted">手环的星星每 10 分钟结算一次。最近入账：${(wallet.recent || []).slice(0, 5).map((x) => `${REASONS[x.item.split(":")[0]] || x.item} +${x.n}`).join(" · ") || "还没有"}</p>`;
@@ -855,7 +871,7 @@
       const R = window.NEST3D;
       if (act === "plant") { seedPickFor = null; say(`种下了${(CROP_INFO[crop] || ["种子"])[0]} 🌱`); sfx("pop"); }
       if (act === "water") { R && R.farmWater && R.farmWater(plot); say(`浇好水啦 💧（${j.watered}/${j.need}）`); sfx("chime"); }
-      if (act === "harvest") { R && R.farmHarvest && R.farmHarvest(plot, (CROP_INFO[j.crop] || ["", "🌱"])[1]); say(`收获了${(CROP_INFO[j.crop] || ["菜"])[0]}！+${j.stars} ⭐`); burst(); }
+      if (act === "harvest") { R && R.farmHarvest && R.farmHarvest(plot, (CROP_INFO[j.crop] || ["", "🌱"])[1]); say(`收获了${(CROP_INFO[j.crop] || ["菜"])[0]}！${j.got ? `×${j.got} 放进背包 🎒 ` : ""}+${j.stars} ⭐`); burst(); window.NEST_LIFE && window.NEST_LIFE.refresh(); }
       await loadWallet(); await poll();
     } catch { say("没成功，网络好像不太好 😢"); }
   }

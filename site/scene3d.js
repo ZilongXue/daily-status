@@ -4,13 +4,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=14";
-import { buildDino } from "./dino3d.js?v=14";
-import { createDecor, encodePos } from "./decor3d.js?v=14";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=14";
-import { MAP } from "./island3d.js?v=14";
-import { createBatcher } from "./batch3d.js?v=14";
-import { glowSprite, season } from "./home3d.js?v=14";
+import { buildPet, SPECIES } from "./pet3d.js?v=15";
+import { buildDino } from "./dino3d.js?v=15";
+import { createDecor, encodePos } from "./decor3d.js?v=15";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=15";
+import { MAP } from "./island3d.js?v=15";
+import { createBatcher } from "./batch3d.js?v=15";
+import { glowSprite, season } from "./home3d.js?v=15";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -379,6 +379,8 @@ function hisHour(d) {
 }
 const localHour = () => { const t = new Date(); return t.getHours() + t.getMinutes() / 60; };
 let skyKind = "day";
+const lightBase = { hemi: 1.2, sun: 2.75 }, dimNow = { k: 0 }, STORM_FOG = new THREE.Color(0x5d6878);
+let fogBase = null;
 function applySky(h) {
   const k = h >= 5 && h < 7.5 ? "dawn" : h >= 7.5 && h < 17 ? "day" : h >= 17 && h < 19.5 ? "dusk" : "night";
   skyKind = k;
@@ -386,6 +388,7 @@ function applySky(h) {
   W.setSky(k);
   hemi.color.setHex(s.hemi[0]); hemi.groundColor.setHex(s.hemi[1]); hemi.intensity = s.hemi[2];
   sun.color.setHex(s.sun[0]); sun.intensity = s.sun[1];
+  lightBase.hemi = s.hemi[2]; lightBase.sun = s.sun[1];
   lampLight.intensity = s.lamp;
   fill.intensity = s.fill;
   RIM.color.value.setHex(s.rim[0]); RIM.k.value = s.rim[1];
@@ -427,7 +430,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=14")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=15")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -545,6 +548,7 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   if (!downAt || holding) return;
   const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 8;
   downAt = null;
+  if (life3d && life3d.inside()) { if (!moved) life3d.tapInside(e); return; }
   if (moved) return;
   if (cast && cast.pull()) return;
   if (tapMode) { // 小游戏（藏宝）：点到哪就是草地上的哪一点，不管点中的是树还是装饰
@@ -553,6 +557,7 @@ renderer.domElement.addEventListener("pointerup", (e) => {
     return;
   }
   const hit = pick(e);
+  if (life3d && life3d.tap(hit, e, ray)) return;
   if (!hit) return;
   const what = hit.object.userData.what;
   if (what === "gacha" || what === "farm" || what === "xmas") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what, x: e.clientX, y: e.clientY } })); return; }
@@ -605,6 +610,7 @@ function resize() {
   renderer.setSize(w, h);
   renderer.domElement.style.imageRendering = pixelMode ? "pixelated" : "auto";
   camera.aspect = w / h;
+  if (life3d) life3d.resizeInterior();
   baseDist = w < 500 ? 21 : 16;
   narrow = w < 500;
   const off = camera.position.clone().sub(controls.target).setLength(baseDist);
@@ -624,6 +630,12 @@ function animate(t, dt) {
   if (cast) cast.update(t, dt, skyKind, world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())));
   if (extras) extras.update(t, dt);
   if (play) play.update(t, dt);
+  if (life3d) {
+    life3d.update(t, dt);
+    const dim = life3d.skyDim(); // 台风天整体压暗
+    if (dim || dimNow.k) { dimNow.k += (dim - dimNow.k) * Math.min(1, dt * 1.5); if (Math.abs(dimNow.k) < 0.002) dimNow.k = 0; hemi.intensity = lightBase.hemi * (1 - 0.4 * dimNow.k); sun.intensity = lightBase.sun * (1 - 0.65 * dimNow.k); if (scene.fog) { if (!fogBase) fogBase = scene.fog.color.clone(); scene.fog.color.copy(fogBase).lerp(STORM_FOG, dimNow.k); } }
+    else if (fogBase) { scene.fog.color.copy(fogBase); fogBase = null; }
+  }
   decor.update(t, dt, skyKind === "night" || skyKind === "dusk");
   if (!pet) return;
   const P = pet, sleep = mood === "sleep";
@@ -821,6 +833,7 @@ function loop(now) {
   const t = clock.getElapsedTime();
   const dt = Math.min(0.1, t - lastT);
   lastT = t;
+  if (life3d && life3d.inside()) { life3d.renderInside(t, dt); adapt(gap, now); return; } // 在小木屋里：只画室内
   const c0 = performance.now();
   animate(REDUCED ? 0 : t, dt);
   batcher.tick(t);
@@ -937,7 +950,7 @@ document.querySelectorAll("[data-species]").forEach((b) => b.addEventListener("c
 }));
 
 /* ---------------------------------------------------------------- 她的小猫 + 小马、钓鱼（cast3d.js，加载失败也不影响别的） */
-let cast = null, extras = null, play = null;
+let cast = null, extras = null, play = null, life3d = null, lastBook = {};
 const dinoApi = {
   root: () => pet.root, parts: () => pet, scale: () => PET_SCALE, home: () => home.clone(),
   sleeping: () => mood === "sleep",
@@ -948,7 +961,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=14").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=15").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -1007,11 +1020,35 @@ window.NEST3D = {
   leaveDock: (who) => cast && cast.leaveDock(who),
   pullFish: () => cast && cast.pull(),
   fishing: (actor) => !!(cast && cast.fishing(actor)),
-  setBook: (b) => cast && cast.setBook(b),
+  setBook: (b) => { lastBook = b || {}; if (cast) cast.setBook(b); },
+  // v15 小岛生活：宠物 / 岛民 / 小船 / 突发事件 / 远方小岛 / 小木屋室内 / 拍照
+  lifeReady: castReady.then(async () => {
+    try {
+      const { createLife3D } = await import("./life3d.js?v=15");
+      life3d = createLife3D({ scene, world, camera, renderer, controls, toon, outlined, W, DOCK, SEA_Y, decor, screenOf, setFocus, clearFocus, walkable, textSprite,
+        isNight: () => skyKind === "night", bookIds: () => Object.keys(lastBook) });
+      castShadows();
+      if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__life3d = life3d; // 本地测试用
+      dispatchEvent(new CustomEvent("nest:lifeready"));
+    } catch (e) { console.warn("life3d", e); }
+    return life3d;
+  }),
+  setLife: (s, who) => life3d && life3d.setState(s, who),
+  enterHome: () => (life3d ? life3d.enter() : Promise.resolve()),
+  exitHome: () => (life3d ? life3d.exit() : undefined),
+  lifeFx: (k, d) => life3d && life3d.fx(k, d),
+  homeFocus: (id) => life3d && life3d.homeFocus(id),
+  setHomePhotos: (urls) => life3d && life3d.setHomePhotos(urls),
+  fishThumbs: (ids, opts) => (life3d ? life3d.fishThumbs(ids, opts) : Promise.resolve(new Map())),
+  petLooks: () => life3d && life3d.petLooks(),
+  setPhotoMode: (on) => life3d && life3d.setPhotoMode(on),
+  snapshot: () => (life3d ? life3d.snapshot(() => { if (life3d.inside()) life3d.renderInside(clock.getElapsedTime(), 0); else renderer.render(scene, camera); }) : null),
+  setSpecies: (k) => { if (k && k !== kind && KINDS[k]) setSpecies(k); },
+  species: () => kind,
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=14");
+      const { createExtras } = await import("./extras3d.js?v=15");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;
@@ -1028,7 +1065,7 @@ window.NEST3D = {
   playReady: castReady.then(async (c) => {
     if (!c) return null;
     try {
-      const { createPlay } = await import("./play3d.js?v=14");
+      const { createPlay } = await import("./play3d.js?v=15");
       play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
       castShadows();
       dispatchEvent(new CustomEvent("nest:playready")); // 游戏状态可能比这里先到，让 social.js 再同步一次

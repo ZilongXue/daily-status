@@ -12,7 +12,8 @@ const store = {
 
 /* ---------------------------------------------------------------- crypto */
 const b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-const b64e = (u8) => btoa(String.fromCharCode(...new Uint8Array(u8)));
+// 分块拼字符串：照片这种几百 KB 的密文一次性展开参数会爆栈
+const b64e = (u8) => { const a = new Uint8Array(u8); let s = ""; for (let i = 0; i < a.length; i += 0x8000) s += String.fromCharCode.apply(null, a.subarray(i, i + 0x8000)); return btoa(s); };
 
 async function deriveKey(pw, blob) {
   const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveKey"]);

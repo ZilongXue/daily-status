@@ -31,6 +31,9 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { gamesGet, gamesPost, checkWishEvent, luckyFish } from "./games.js";
+import { lifeGet, lifePost, bagAdd, bagKeyForFish, fishEnv, catchable, rollWeighted, sizeOf } from "./life.js";
+import { FISH } from "../../site/fishdata.js";
+import { PHOTO_LIMITS } from "../../site/lifedata.js";
 
 const KINDS = new Set(["feed", "angry", "hit", "calm", "sorry", "flower", "note", "nudge", "buy", "place", "mood", "sleep", "wake", "act", "answer", "night", "tuck", "wear", "move", "wish", "wishdone"]);
 const MOODS = new Set(["happy", "tired", "miss", "angry", "sleepy"]);
@@ -42,8 +45,11 @@ const POOL = [
   ["whale", "epic", 4, 3], ["turtle", "epic", 4, 3], ["chest", "epic", 2, -1],
   ["goldkoi", "legend", 0.8, 10], ["mermaid", "legend", 0.6, 8], ["star", "legend", 0.6, 15],
 ];
-const RARITY = Object.fromEntries(POOL.map(([id, r]) => [id, r]));
-const FREE_CASTS = 3, CAST_PRICE = 2, MAX_CASTS = 10, PITY = 15;
+const RARITY = Object.fromEntries(Object.entries(FISH).map(([id, f]) => [id, f.rarity]));
+// v15：60 种鱼（site/fishdata.js），有钓点和出现条件。POOL 只剩钓鱼大赛在用。
+const FISH_STARS = { common: 0, rare: 1, epic: 3, legend: 10 };
+const LEGACY_STARS = Object.fromEntries(POOL.map(([id, , , st]) => [id, st]));
+const FREE_CASTS = 5, CAST_PRICE = 2, MAX_CASTS = 12, PITY = 15;
 // 装饰的价格（星星）。"snow" 是天气：买了以后可以开关下雪。
 const SHOP = {
   flowers_bed: 5, mushrooms: 6, fence: 6, mailbox: 8, bench: 8, lamppost: 10, lights: 12, gifts: 12,
@@ -107,7 +113,7 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const url = new URL(req.url);
     if (url.pathname === "/rt") return roomConnect(req, env);
-    if (!["/events", "/push-test", "/subscribe", "/wallet", "/mint", "/fish", "/gacha", "/farm", "/qa", "/world", "/games"].includes(url.pathname)) return json({ error: "not found" }, 404, cors);
+    if (!["/events", "/push-test", "/subscribe", "/wallet", "/mint", "/fish", "/gacha", "/farm", "/qa", "/world", "/games", "/life", "/photos"].includes(url.pathname)) return json({ error: "not found" }, 404, cors);
     if (url.pathname === "/mint") {
       if (req.method !== "POST" || !(await sysAuthorized(req, env))) return json({ error: "unauthorized" }, 401, cors);
       let b;
@@ -120,8 +126,33 @@ export default {
     if (url.pathname === "/wallet" && req.method === "GET") return json(await wallet(env), 200, cors);
     if (url.pathname === "/qa" && req.method === "GET") return json(await qa(env), 200, cors);
     if (url.pathname === "/world" && req.method === "GET") return json(await world(env, ctx), 200, cors);
+    if (url.pathname === "/life") {
+      const deps = lifeDeps();
+      if (req.method === "GET") {
+        const who = url.searchParams.get("who");
+        if (who !== "me" && who !== "her") return json({ error: "bad who" }, 400, cors);
+        const r = await lifeGet(env, who, deps);
+        return json(r, r.error ? r.status || 400 : 200, cors);
+      }
+      if (req.method !== "POST") return json({ error: "method not allowed" }, 405, cors);
+      let b;
+      try { b = await req.json(); } catch { return json({ error: "bad json" }, 400, cors); }
+      if (!b || (b.who !== "me" && b.who !== "her") || typeof b.op !== "string") return json({ error: "bad body" }, 400, cors);
+      const r = await lifePost(env, b, deps);
+      if (r.error) return json(r, r.status || 400, cors);
+      if (["hatch", "give", "unload", "sail", "brace", "shoo", "whale", "claim", "cook"].includes(b.op)) ctx.waitUntil(push(env, { who: b.who, kind: "life", item: b.op }).catch(() => {}));
+      ctx.waitUntil(notifyRoom(env, { who: b.who, kind: "life", id: null }));
+      return json(r, 201, cors);
+    }
+    if (url.pathname === "/photos") {
+      const r = await photos(env, req, url);
+      if (r.notify) ctx.waitUntil(notifyRoom(env, { who: r.notify, kind: "photo", id: r.eid }));
+      if (r.notify) ctx.waitUntil(push(env, { who: r.notify, kind: "photo" }).catch(() => {}));
+      delete r.notify;
+      return json(r, r.error ? r.status || 400 : 200, cors);
+    }
     if (url.pathname === "/games") {
-      const deps = { mint, bjDay, POOL };
+      const deps = { mint, bjDay, POOL, onCatch };
       if (req.method === "GET") {
         const who = url.searchParams.get("who");
         if (who !== "me" && who !== "her") return json({ error: "bad who" }, 400, cors);
@@ -152,7 +183,7 @@ export default {
       let b;
       try { b = await req.json(); } catch { return json({ error: "bad json" }, 400, cors); }
       if (!b || (b.who !== "me" && b.who !== "her")) return json({ error: "bad who" }, 400, cors);
-      const r = await fish(env, b.who, b.pay === true);
+      const r = await fish(env, b.who, b.pay === true, b.spot === "pool" ? "pool" : "sea", ctx);
       if (r.error) return json(r, r.status, cors);
       ctx.waitUntil(push(env, { who: b.who, kind: "fish", item: r.catch }).catch(() => {}));
       ctx.waitUntil(notifyRoom(env, { who: b.who, kind: "fish", id: r.id }));
@@ -300,7 +331,9 @@ async function wallet(env) {
   const shown = {};
   for (const b of buys) shown[b.item] = 1;
   for (const p of places) shown[p.item] = p.n;
-  const { results: book } = await env.DB.prepare("SELECT item, COUNT(*) AS c FROM events WHERE kind IN ('fish', 'dfish') AND item != 'miss' GROUP BY item").all();
+  const { results: book } = await env.DB.prepare("SELECT fish AS item, COUNT(*) AS c, MAX(cm) AS cm, MIN(id) AS fid FROM catches GROUP BY fish").all();
+  const { results: firsts } = await env.DB.prepare("SELECT id, ts, who FROM catches WHERE id IN (SELECT MIN(id) FROM catches GROUP BY fish)").all();
+  const fmap = Object.fromEntries(firsts.map((x) => [x.id, x]));
   const dayStart = Date.parse(bjDay() + "T00:00:00+08:00");
   const { results: today } = await env.DB.prepare("SELECT who, COUNT(*) AS c FROM events WHERE kind = 'fish' AND ts >= ? GROUP BY who").bind(dayStart).all();
   const casts = { me: 0, her: 0 };
@@ -321,11 +354,12 @@ async function wallet(env) {
   for (const x of gToday) spins[x.who] = x.c;
   return { balance: earned - spent, earned, owned: buys.map((b) => b.item), shown, recent, prices: SHOP, outfits: OUTFITS, worn, pos, spins,
     gachaRules: { free: 1, price: GACHA_PRICE, max: GACHA_MAX, xmas: isXmas() }, farm: await farmState(env),
-    fishbook: Object.fromEntries(book.map((x) => [x.item, x.c])), casts, fishRules: { free: FREE_CASTS, price: CAST_PRICE, max: MAX_CASTS } };
+    fishbook: Object.fromEntries(book.map((x) => [x.item, x.c])),
+    fishrec: Object.fromEntries(book.map((x) => [x.item, { cm: x.cm, by: fmap[x.fid] && fmap[x.fid].who, ts: fmap[x.fid] && fmap[x.fid].ts }])), casts, fishRules: { free: FREE_CASTS, price: CAST_PRICE, max: MAX_CASTS } };
 }
 
 // ---------------------------------------------------------------- 钓鱼
-async function fish(env, who, pay) {
+async function fish(env, who, pay, spot, ctx) {
   const dayStart = Date.parse(bjDay() + "T00:00:00+08:00");
   const { c } = await env.DB.prepare("SELECT COUNT(*) AS c FROM events WHERE kind = 'fish' AND who = ? AND ts >= ?").bind(who, dayStart).first();
   if (c >= MAX_CASTS) return { error: "no more casts today", status: 429 };
@@ -336,20 +370,29 @@ async function fish(env, who, pay) {
     if (w.balance < CAST_PRICE) return { error: "not enough stars", status: 402, balance: w.balance };
     cost = CAST_PRICE;
   }
+  // 这一竿能钓到什么：看钓点 + 钓的人那边此刻的时段、季节、天气、月相
+  const fe = fishEnv(await world(env, ctx).catch(() => null), who);
+  let ids = Object.keys(FISH).filter((id) => catchable(id, spot, fe));
   // 保底：最近 PITY-1 竿都没有史诗以上，这一竿只在史诗 / 传说里抽
   const { results: lastCasts } = await env.DB.prepare("SELECT item FROM events WHERE kind = 'fish' ORDER BY id DESC LIMIT ?").bind(PITY - 1).all();
   const pity = lastCasts.length >= PITY - 1 && lastCasts.every((x) => RARITY[x.item] === "common" || RARITY[x.item] === "rare");
-  const pool = pity ? POOL.filter(([, r]) => r === "epic" || r === "legend") : POOL;
-  const total = pool.reduce((a, p) => a + p[2], 0);
-  let x = (crypto.getRandomValues(new Uint32Array(1))[0] / 2 ** 32) * total, pick = pool[0];
-  for (const p of pool) { if ((x -= p[2]) < 0) { pick = p; break; } }
-  const [id, rarity, , base] = pick;
-  const first = !(await env.DB.prepare("SELECT 1 FROM events WHERE kind = 'fish' AND item = ?").bind(id).first());
+  if (pity) { const hi = ids.filter((id) => FISH[id].rarity === "epic" || FISH[id].rarity === "legend"); if (hi.length) ids = hi; }
+  const id = rollWeighted(ids);
+  const rarity = FISH[id].rarity;
+  const cm = sizeOf(id);
+  const prev = await env.DB.prepare("SELECT COUNT(*) AS n, MAX(cm) AS best FROM catches WHERE fish = ?").bind(id).first();
+  const first = !prev || prev.n === 0;
+  const record = !first && prev.best != null && cm > prev.best;
   const ts = Date.now();
   const r = await env.DB.prepare("INSERT INTO events (ts, who, kind, item, n) VALUES (?, ?, 'fish', ?, ?)").bind(ts, who, id, cost).run();
   const fid = r.meta.last_row_id;
-  let stars = base < 0 ? 5 + (crypto.getRandomValues(new Uint8Array(1))[0] % 6) : base;
+  await env.DB.prepare("INSERT INTO catches (ts, who, fish, cm, spot) VALUES (?, ?, ?, ?, ?)").bind(ts, who, id, cm, spot).run();
+  const bk = bagKeyForFish(id);
+  if (bk) await bagAdd(env, { [bk]: 1 });
+  let stars = id in LEGACY_STARS ? LEGACY_STARS[id] : FISH_STARS[rarity];
+  if (stars < 0) stars = 5 + (crypto.getRandomValues(new Uint8Array(1))[0] % 6); // 宝箱
   if (first) stars += 1;
+  if (record) stars += 1;
   const lucky = id === luckyFish(bjDay());
   if (lucky) stars += 2; // 今日幸运鱼
   if (stars > 0) await mint(env, `fish:${fid}`, stars);
@@ -359,7 +402,60 @@ async function fish(env, who, pay) {
     const n = await env.DB.prepare("SELECT ts, box FROM events WHERE kind = 'note' AND who = ? AND box IS NOT NULL ORDER BY RANDOM() LIMIT 1").bind(other).first();
     if (n) note = { ts: n.ts, box: n.box };
   }
-  return { id: fid, ts, catch: id, rarity, stars, first, lucky, cost, pity, note, used: c + 1, free: FREE_CASTS, max: MAX_CASTS };
+  return { id: fid, ts, catch: id, rarity, stars, first, record, cm, best: prev && prev.best, spot, env: fe, bag: bk, lucky, cost, pity, note, used: c + 1, free: FREE_CASTS, max: MAX_CASTS };
+}
+
+// 钓鱼大赛钓到的也进图鉴和背包
+async function onCatch(env, who, id, cm, spot) {
+  await env.DB.prepare("INSERT INTO catches (ts, who, fish, cm, spot) VALUES (?, ?, ?, ?, ?)").bind(Date.now(), who, id, cm ?? null, spot).run();
+  const bk = bagKeyForFish(id);
+  if (bk) await bagAdd(env, { [bk]: 1 });
+}
+async function addEventRow(env, who, kind, item = null, n = null) {
+  const r = await env.DB.prepare("INSERT INTO events (ts, who, kind, item, n) VALUES (?, ?, ?, ?, ?)").bind(Date.now(), who, kind, item, n).run();
+  return r.meta.last_row_id;
+}
+// 摆在岛上的装饰（台风可能吹倒两件）
+async function shownDecor(env) {
+  const w = await wallet(env);
+  return Object.entries(w.shown || {}).filter(([k, v]) => v && k !== "snow" && (k in SHOP || GACHA_DECOR.has(k))).map(([k]) => k);
+}
+const lifeDeps = () => ({ mint, bjDay, addEvent: addEventRow, shownDecor });
+
+// ---------------------------------------------------------------- 相册（照片只以密文存：缩略图 + 原图各一个 box）
+// GET /photos?before=<id>  → 最近 24 张的缩略图；GET /photos?id=<id> → 一张的原图；POST {who, thumb, full} / {who, op:"del", id}
+const BOX_RE = /^[A-Za-z0-9+/=]+\.[A-Za-z0-9+/=]+$/;
+async function photos(env, req, url) {
+  if (req.method === "GET") {
+    const id = parseInt(url.searchParams.get("id") || "0", 10);
+    if (id > 0) {
+      const r = await env.DB.prepare("SELECT id, ts, who, full FROM photos WHERE id = ?").bind(id).first();
+      return r || { error: "not found", status: 404 };
+    }
+    const before = parseInt(url.searchParams.get("before") || "0", 10) || 2 ** 31;
+    const { results } = await env.DB.prepare("SELECT id, ts, who, thumb FROM photos WHERE id < ? ORDER BY id DESC LIMIT 24").bind(before).all();
+    const { n } = await env.DB.prepare("SELECT COUNT(*) AS n FROM photos").first();
+    return { photos: results, total: n, more: results.length === 24 };
+  }
+  if (req.method !== "POST") return { error: "method not allowed", status: 405 };
+  let b;
+  try { b = await req.json(); } catch { return { error: "bad json" }; }
+  if (!b || (b.who !== "me" && b.who !== "her")) return { error: "bad who" };
+  if (b.op === "del") {
+    const r = await env.DB.prepare("DELETE FROM photos WHERE id = ? AND who = ?").bind(b.id, b.who).run();
+    return r.meta.changes ? { ok: true } : { error: "not yours", status: 403 };
+  }
+  if (typeof b.thumb !== "string" || typeof b.full !== "string" || !BOX_RE.test(b.thumb) || !BOX_RE.test(b.full)) return { error: "bad photo" };
+  if (b.thumb.length > PHOTO_LIMITS.thumb || b.full.length > PHOTO_LIMITS.full) return { error: "photo too big", status: 413 };
+  const dayStart = Date.parse(bjDay() + "T00:00:00+08:00");
+  const { c } = await env.DB.prepare("SELECT COUNT(*) AS c FROM photos WHERE ts >= ?").bind(dayStart).first();
+  if (c >= PHOTO_LIMITS.perDay) return { error: "too many photos today", status: 429 };
+  const ts = Date.now();
+  const r = await env.DB.prepare("INSERT INTO photos (ts, who, thumb, full) VALUES (?, ?, ?, ?)").bind(ts, b.who, b.thumb, b.full).run();
+  const pid = r.meta.last_row_id;
+  const eid = await addEventRow(env, b.who, "photo", String(pid), null);
+  await mint(env, `photo:${bjDay()}:${b.who}`, 1);
+  return { id: pid, ts, eid, notify: b.who };
 }
 
 // ---------------------------------------------------------------- 扭蛋
@@ -462,9 +558,10 @@ async function farm(env, b) {
   if (b.act === "harvest") {
     if (!cur || !cur.ready) return { error: "not ready", status: 409 };
     const r = await add(`harvest:${cur.crop}`);
-    const stars = CROPS[cur.crop].reward;
+    const stars = Math.ceil(CROPS[cur.crop].reward / 2); // v15：收成进背包（2 份），星星减半
     await mint(env, `harvest:${r.meta.last_row_id}`, stars);
-    return { act: "harvest", plot: p, crop: cur.crop, stars };
+    await bagAdd(env, { [cur.crop]: 2 });
+    return { act: "harvest", plot: p, crop: cur.crop, stars, got: 2 };
   }
   return { error: "bad act" };
 }
@@ -544,7 +641,7 @@ function json(body, status, headers) {
 // 只推她那边的动作；揍人类的高频动作做节流。推送不带任何内容（payload 为空），
 // 通知文字由手机上的 service worker 自己拉 /events 生成，推送服务（FCM）看不到内容。
 async function push(env, e) {
-  if (e.who !== "her" || !["feed", "angry", "hit", "calm", "note", "nudge", "buy", "mood", "sleep", "wake", "act", "fish", "answer", "tuck", "gacha", "hunt", "derby", "quiz", "wish", "wishdone", "rps"].includes(e.kind)) return;
+  if (e.who !== "her" || !["feed", "angry", "hit", "calm", "note", "nudge", "buy", "mood", "sleep", "wake", "act", "fish", "answer", "tuck", "gacha", "hunt", "derby", "quiz", "wish", "wishdone", "rps", "life", "photo"].includes(e.kind)) return;
   if (e.kind === "fish" && RARITY[e.item] === "common") return; // 钓到普通的不打扰你
   if (e.kind === "gacha" && GACHA_RARITY[e.item] !== "epic") return;
   if (e.kind === "hit") {

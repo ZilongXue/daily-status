@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fish generator preview</title>
+<link rel="icon" href="data:,">
+<style>
+  html, body { margin: 0; height: 100%; background: #d4f0fb; font: 13px system-ui, "PingFang SC", sans-serif; color: #345; }
+  #c { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; z-index: 3; }
+  button { border: 1px solid #b9cfd8; background: #fff; border-radius: 8px; padding: 5px 9px; cursor: pointer; font: inherit; }
+  button.on { background: #ffe9a8; border-color: #e0b84a; }
+  #stat { position: fixed; top: 6px; left: 8px; font-size: 12px; background: rgba(255,255,255,.8); padding: 4px 8px; border-radius: 6px; z-index: 3; white-space: pre; }
+  #err { position: fixed; top: 6px; right: 8px; max-width: 45%; font-size: 12px; color: #fff; background: #c33; padding: 4px 8px; border-radius: 6px; z-index: 4; display: none; white-space: pre-wrap; }
+  #labels { position: fixed; inset: 0; pointer-events: none; z-index: 2; }
+  .lb { position: absolute; transform: translate(-50%, 0); font-size: 11px; padding: 1px 6px; border-radius: 8px; color: #fff; white-space: nowrap; }
+  #thumbs { display: none; position: relative; z-index: 2; padding: 34px 10px 60px; background: #d4f0fb; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; }
+  .card { background: rgba(255,255,255,.75); border-radius: 12px; padding: 6px; text-align: center; border: 2px solid transparent; }
+  .card img { width: 96px; height: 96px; image-rendering: auto; }
+  .card .n { font-size: 12px; }
+  .card .sub { font-size: 10px; color: #789; }
+  h3 { margin: 12px 0 6px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<div id="thumbs"></div>
+<div id="stat"></div>
+<div id="err"></div>
+<div class="bar" id="bar"></div>
+<script>
+  // 页面上直接显示错误（headless 截图也看得到）
+  window.__errs = [];
+  const showErr = (m) => { window.__errs.push(m); const e = document.getElementById("err"); e.style.display = "block"; e.textContent = window.__errs.slice(-6).join("\n"); };
+  addEventListener("error", (e) => showErr("error: " + e.message));
+  addEventListener("unhandledrejection", (e) => showErr("reject: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+  const ce = console.error; console.error = (...a) => { showErr(a.join(" ")); ce.apply(console, a); };
+</script>
+<script type="module">
+// ?focus=<id> 只看一条（近景）· ?new 只看新的 45 种 · ?thumbs 缩略图网格（正常 + 剪影）· ?r=<rarity> ?s=<spot> 过滤 · ?yaw=<deg> · ?still 不动
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { swim, shine, RARITY, CATCH } from "./fish3d.js?v=15";
+import { FISH, FISH_IDS } from "./fishdata.js?v=15";
+import { buildFish, fishThumbs } from "./fishgen3d.js?v=15";
+
+const params = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xd4f0fb);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+// 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+const T = { toon, outlined };
+window.__renderer = renderer; window.__T = T; // 调试：在活的页面上跑 fishThumbs
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+
+const SPOT_NAME = { sea: "码头", pool: "水潭", "far:sakura": "樱花岛", "far:snow": "雪岛", "far:volcano": "火山岛" };
+const st = document.getElementById("stat");
+
+/* ---------- 每条鱼单独的 draw call 数（空场景里只放它一个） */
+function measureDraws() {
+  const s = new THREE.Scene();
+  s.add(new THREE.HemisphereLight(0xffffff, 0x888888, 2));
+  const cam = new THREE.PerspectiveCamera(30, 1, 0.05, 10);
+  cam.position.set(0.3, 0.2, 1.1);
+  cam.lookAt(0, 0, 0);
+  const res = {};
+  for (const id of FISH_IDS) {
+    const o = buildFish(id, T);
+    s.add(o.root);
+    renderer.render(s, cam);
+    res[id] = renderer.info.render.calls;
+    s.remove(o.root);
+  }
+  return res;
+}
+
+if (params.has("thumbs")) {
+  /* ================= 缩略图模式 ================= */
+  canvas.style.display = "none";
+  const box = document.getElementById("thumbs");
+  box.style.display = "block";
+  // 先把 renderer 设成"奇怪"的状态，验证 fishThumbs 用完会还原
+  renderer.setClearColor(0x123456, 0.7);
+  renderer.setViewport(3, 4, 50, 60);
+  renderer.setScissor(1, 2, 30, 40);
+  renderer.setScissorTest(true);
+  renderer.autoClear = false;
+  const snap = () => JSON.stringify([renderer.getClearColor(new THREE.Color()).getHex(), renderer.getClearAlpha(), renderer.getViewport(new THREE.Vector4()).toArray(), renderer.getScissor(new THREE.Vector4()).toArray(), renderer.getScissorTest(), renderer.autoClear, renderer.getRenderTarget(), renderer.outputColorSpace]);
+  const before = snap();
+  const ids = FISH_IDS.filter((id) => (!params.get("r") || FISH[id].rarity === params.get("r")) && (!params.get("s") || FISH[id].spot.startsWith(params.get("s"))));
+  const t0 = performance.now();
+  const norm = await fishThumbs(renderer, ids, T, 128);
+  const t1 = performance.now();
+  const sil = await fishThumbs(renderer, ids, T, 128, { silhouette: true });
+  const t2 = performance.now();
+  const ok = snap() === before;
+  st.textContent = `thumbs: ${ids.length} 条 · 正常 ${Math.round(t1 - t0)}ms · 剪影 ${Math.round(t2 - t1)}ms · renderer 状态还原 ${ok ? "✓" : "✗ " + snap()}`;
+  window.__thumbState = ok;
+  let html = "";
+  let lastSpot = null;
+  for (const id of ids) {
+    const f = FISH[id];
+    if (f.spot !== lastSpot) { if (lastSpot) html += "</div>"; html += `<h3>${SPOT_NAME[f.spot]}</h3><div class="grid">`; lastSpot = f.spot; }
+    html += `<div class="card" style="border-color:${RARITY[f.rarity].color}"><img src="${norm.get(id)}"><img src="${sil.get(id)}" style="width:48px;height:48px"><div class="n">${f.emoji} ${f.name}</div><div class="sub">${id} · ${RARITY[f.rarity].name}</div></div>`;
+  }
+  box.innerHTML = html + "</div>";
+  window.__thumbsDone = true;
+} else {
+  /* ================= 3D 网格模式 ================= */
+  const draws = measureDraws();
+  const maxDraw = Math.max(...Object.values(draws));
+  window.__draws = draws;
+  console.log("draws per fish", JSON.stringify(draws));
+
+  const focus = params.get("focus");
+  const filt = { r: params.get("r") || "all", s: params.get("s") || "all" };
+  const yaw = THREE.MathUtils.degToRad(+params.get("yaw") || 0);
+  const all = FISH_IDS.map((id) => {
+    const o = buildFish(id, T);
+    o.root.rotation.y = yaw;
+    const g = new THREE.Group();
+    g.add(o.root);
+    const lb = document.createElement("div");
+    lb.className = "lb";
+    lb.style.background = RARITY[FISH[id].rarity].color;
+    lb.textContent = `${FISH[id].name}`;
+    lb.title = id;
+    document.getElementById("labels").appendChild(lb);
+    return { id, o, g, lb };
+  });
+  window.fish = Object.fromEntries(all.map((a) => [a.id, a.o]));
+  let shown = [];
+  let cols = 10, rows = 1;
+  const SP = 0.62;
+  function layout() {
+    for (const a of all) scene.remove(a.g);
+ shown = all.filter((a) => (focus ? a.id === focus : (!params.has("new") || !CATCH[a.id]) && (filt.r === "all" || FISH[a.id].rarity === filt.r) && (filt.s === "all" || FISH[a.id].spot.startsWith(filt.s))));
+    cols = focus ? 1 : Math.min(10, Math.ceil(Math.sqrt(shown.length * 1.6)));
+    rows = Math.ceil(shown.length / cols);
+    shown.forEach((a, i) => {
+      const c = i % cols, r = Math.floor(i / cols);
+      a.g.position.set((c - (cols - 1) / 2) * SP, -(r - (rows - 1) / 2) * SP, 0);
+      scene.add(a.g);
+    });
+    for (const a of all) a.lb.style.display = shown.includes(a) && !focus ? "block" : "none";
+    place();
+  }
+  function place() {
+    const tn = Math.tan(THREE.MathUtils.degToRad(15));
+    const H = rows * SP + 0.1, W = cols * SP + 0.1;
+    const fit = focus ? 1.25 : Math.max(H / (2 * tn), W / (2 * tn * camera.aspect));
+    controls.target.set(0, focus ? 0 : -0.04, 0);
+    camera.position.set(0, focus ? 0.25 : 0.05 * fit, fit);
+    controls.update();
+  }
+  const bar = document.getElementById("bar");
+  const btn = (label, group, val) => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.dataset.g = group; b.dataset.v = val;
+    b.onclick = () => { filt[group] = val; refreshBtns(); layout(); };
+    bar.appendChild(b);
+  };
+  function refreshBtns() { for (const b of bar.children) if (b.dataset.g) b.classList.toggle("on", filt[b.dataset.g] === b.dataset.v); }
+  btn("全部", "r", "all");
+  for (const r of ["common", "rare", "epic", "legend"]) btn(RARITY[r].name, "r", r);
+  btn("所有钓点", "s", "all");
+  for (const s of ["sea", "pool", "far"]) btn({ sea: "码头", pool: "水潭", far: "远方的岛" }[s], "s", s);
+  const anim = { on: !params.has("still") };
+  const tb = document.createElement("button"); tb.textContent = "动画"; tb.onclick = () => { anim.on = !anim.on; }; bar.appendChild(tb);
+  for (const [k, deg] of Object.entries({ "侧面": 0, "3/4": 35, "正面": 90 })) {
+    const b = document.createElement("button"); b.textContent = k; b.onclick = () => { for (const a of all) a.o.root.rotation.y = THREE.MathUtils.degToRad(deg); }; bar.appendChild(b);
+  }
+  refreshBtns();
+
+  function resize() {
+    const w = innerWidth, h = innerHeight;
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    place();
+  }
+  addEventListener("resize", resize);
+  resize();
+  layout();
+
+  const clock = new THREE.Clock();
+  const v = new THREE.Vector3();
+  let frames = 0, fpsT = 0, fps = 0;
+  const big = Object.entries(draws).filter(([, n]) => n === maxDraw).map(([k]) => k);
+  renderer.setAnimationLoop(() => {
+    const dt = Math.min(0.05, clock.getDelta());
+    const t = params.has("still") ? 0.42 : clock.elapsedTime;
+    if (anim.on || params.has("still")) for (const a of shown) { swim(a.o, t + a.id.length * 0.37, 1); shine(a.o, t); }
+    controls.update();
+    renderer.render(scene, camera);
+    const calls = renderer.info.render.calls;
+    if (!focus) for (const a of shown) {
+      v.set(0, -0.27, 0).add(a.g.position).project(camera);
+      a.lb.style.left = ((v.x + 1) / 2) * innerWidth + "px";
+      a.lb.style.top = ((1 - v.y) / 2) * innerHeight + "px";
+    }
+    frames++; fpsT += dt;
+    if (fpsT > 0.5 || !fps) { fps = Math.round(frames / Math.max(fpsT, 0.001)); frames = 0; fpsT = 0;
+      st.textContent = `${shown.length} 条 · ${fps} fps · 场景 ${calls} draws · ${Math.round(renderer.info.render.triangles)} tris\n单条最多 ${maxDraw} draws（${big.join(", ")}）` + (focus ? `\n${focus}: ${draws[focus]} draws · size ${shown[0]?.o.size.toArray().map((x) => x.toFixed(2)).join("×")}` : ""); }
+  });
+  window.__ready = true;
+}
+</script>
+</body>
+</html>

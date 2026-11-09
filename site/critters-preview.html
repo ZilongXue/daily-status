@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Critters preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #e9f6ea; font: 14px system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; }
+  button { border: 1px solid #b9d3bd; background: #fff; border-radius: 8px; padding: 5px 9px; cursor: pointer; font-size: 13px; }
+  button.on { background: #ffe0ec; border-color: #f0a8c4; }
+  #stat { position: fixed; top: 6px; left: 8px; font-size: 12px; color: #456; background: rgba(255,255,255,.75); padding: 4px 8px; border-radius: 6px; max-width: 70vw; }
+  #err { position: fixed; top: 6px; right: 8px; font-size: 12px; color: #fff; background: #c33; padding: 4px 8px; border-radius: 6px; display: none; white-space: pre-wrap; max-width: 40vw; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stat"></div>
+<div id="err"></div>
+<div class="bar" id="bar"></div>
+<script>
+  const errBox = document.getElementById("err");
+  const showErr = (m) => { errBox.style.display = "block"; errBox.textContent += m + "\n"; (window.__errors = window.__errors || []).push(m); };
+  addEventListener("error", (e) => showErr(String(e.message || e)));
+  addEventListener("unhandledrejection", (e) => showErr(String(e.reason && e.reason.stack || e.reason)));
+</script>
+<script type="module">
+// ?focus=pet | pet:<species>[:<variant>] | visitor | visitor:<id> | egg | egg:<pattern> | boat | size
+// ?state=idle|walk|hop|sleep|eat|happy|wave|talk   ?wobble=0..1 ?crack=0..1 ?sail=0..1   ?yaw=<deg> ?elev=<deg> ?t=<固定时间>
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { PET_LOOKS, VISITOR_LOOKS, EGG_PATTERNS, buildPet, buildVisitor, buildEgg, buildBoat } from "./critters3d.js?v=15";
+import { buildKitten } from "./her3d.js?v=15";
+import { buildDino } from "./dino3d.js?v=15";
+
+const params = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xe9f6ea);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 1, 0.05, 100);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+// 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.userData.outline = thickness;
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+const T = { toon, outlined };
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+
+function label(text, sub, color, w = 0.5) {
+  const cv = document.createElement("canvas");
+  cv.width = 320; cv.height = 96;
+  const g = cv.getContext("2d");
+  g.fillStyle = color;
+  g.beginPath(); g.roundRect(8, 8, 304, 80, 30); g.fill();
+  g.fillStyle = "#fff";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = "bold 36px system-ui, 'PingFang SC', sans-serif";
+  g.fillText(text, 160, 38);
+  g.font = "22px system-ui, sans-serif";
+  g.fillText(sub, 160, 72);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  sp.scale.set(w, w * 0.3, 1);
+  sp.renderOrder = 10;
+  return sp;
+}
+const groundMat = new THREE.MeshBasicMaterial({ color: 0xcfe9c6 });
+const groundGeo = new THREE.CircleGeometry(1, 32).rotateX(-Math.PI / 2);
+const water = new THREE.MeshBasicMaterial({ color: 0x9fd8f0, transparent: true, opacity: 0.75 });
+
+const focus = (params.get("focus") || "").split(":");
+const kind = focus[0] || "";
+const yaw = THREE.MathUtils.degToRad(+params.get("yaw") || 0);
+const items = []; // { kind, obj, root, name, draws }
+const rows = [];  // { y, items: [...] }
+let rowY = 0;
+function row(list, spacing, height, top = 0) {
+  // list: [{ root, title, sub, color, kind, obj, ground: 'grass'|'water'|null, gr }]；top = 这一行东西的高度（往上占的空间）
+  rowY -= top;
+  const r = { y: rowY, list };
+  list.forEach((it, i) => {
+    const g = new THREE.Group();
+    g.position.set((i - (list.length - 1) / 2) * spacing, rowY, 0);
+    if (it.ground !== null) {
+      const gm = new THREE.Mesh(groundGeo, it.ground === "water" ? water : groundMat);
+      gm.scale.setScalar(it.gr || spacing * 0.42);
+      gm.position.y = -0.002;
+      g.add(gm);
+    }
+    it.root.rotation.y = yaw;
+    g.add(it.root);
+    const lb = label(it.title, it.sub || "", it.color, Math.min(0.62, spacing * 0.92));
+    lb.position.set(0, -0.06 - spacing * 0.05, it.ground === "water" ? 0.5 : spacing * 0.42);
+    g.add(lb);
+    it.label = lb;
+    scene.add(g);
+  });
+  rowY -= height;
+  rows.push(r);
+  return r;
+}
+
+const petVariantFilter = focus[2] != null ? +focus[2] : null;
+const showPets = !kind || kind === "pet";
+const showVis = !kind || kind === "visitor";
+const showEggs = !kind || kind === "egg";
+const showBoat = !kind || kind === "boat";
+const showSize = !kind || kind === "size";
+
+const SPECIES = Object.keys(PET_LOOKS);
+if (showPets) {
+  const sp = focus[1] ? [focus[1]] : SPECIES;
+  const per = focus[1] ? 1 : 3; // 每行 3 种 × 4 色
+  for (let r = 0; r < sp.length; r += per) {
+    const list = [];
+    for (const s of sp.slice(r, r + per)) PET_LOOKS[s].variants.forEach((v, vi) => {
+      if (petVariantFilter != null && vi !== petVariantFilter) return;
+      const p = buildPet(s, vi, T);
+      list.push({ root: p.root, obj: p, kind: "pet", title: `${PET_LOOKS[s].name}`, sub: `${v.name}${v.shiny ? " ✦" : ""}`, color: v.shiny ? "#c9a227" : "#7aa77f" });
+    });
+    row(list, focus[1] ? 0.55 : 0.46, 0.2, 0.3);
+    items.push(...list);
+  }
+}
+if (showVis) {
+  const ids = focus[1] ? [focus[1]] : Object.keys(VISITOR_LOOKS);
+  const list = ids.map((id) => { const v = buildVisitor(id, T); return { root: v.root, obj: v, kind: "visitor", title: VISITOR_LOOKS[id].name, sub: id, color: "#8a7fc0" }; });
+  row(list, 0.7, 0.2, 0.6);
+  items.push(...list);
+}
+if (showEggs || showBoat) {
+  const list = [];
+  if (showEggs) for (const p of focus[1] ? [focus[1]] : EGG_PATTERNS) { const e = buildEgg(p, T); e.root.scale.setScalar(1.6); list.push({ root: e.root, obj: e, kind: "egg", title: "蛋", sub: p + " (×1.6)", color: "#d08a6a", gr: 0.13 }); }
+  if (showBoat) { const b = buildBoat(T); list.push({ root: b.root, obj: b, kind: "boat", title: "小帆船", sub: "~0.9 长", color: "#5a9ec4", ground: "water", gr: 0.55 }); }
+  row(list, kind === "egg" || kind === "boat" ? 0.5 : 0.46, 0.2, showBoat ? 0.95 : 0.25);
+  if (showBoat && list.length > 1) { const b = list[list.length - 1]; b.root.parent.position.x += 0.5; b.root.rotation.y = yaw - 0.5; }
+  items.push(...list);
+}
+// 大小对照：她的小猫（×0.68）、他的小恐龙（×0.88）、一位访客、两只宠物、一颗蛋
+let kitten = null, dino = null;
+if (showSize) {
+  kitten = buildKitten(T); kitten.root.scale.setScalar(0.68);
+  dino = buildDino(T); dino.root.scale.setScalar(0.88);
+  const v = buildVisitor("bear", T), p1 = buildPet("bunny", 0, T), p2 = buildPet("seal", 1, T), e = buildEgg("heart", T);
+  const g = new THREE.Group();
+  const place = (o, x) => { o.position.x = x; g.add(o); };
+  place(kitten.root, -1.2); place(v.root, -0.45); place(dino.root, 0.4); place(p1.root, 1.2); place(p2.root, 1.5); place(e.root, 1.75);
+  const gm = new THREE.Mesh(new THREE.PlaneGeometry(3.6, 0.8).rotateX(-Math.PI / 2), groundMat);
+  gm.position.set(0.35, -0.002, 0); g.add(gm);
+  const it = { w: 3.8, root: g, obj: null, kind: "size", title: "大小对照", sub: "猫×0.68 恐龙×0.88", color: "#999", ground: null };
+  row([it], 1, 0.25, 1.15);
+  for (const [o, f] of [[v, "visitor"], [p1, "pet"], [p2, "pet"], [e, "egg"]]) items.push({ root: o.root, obj: o, kind: f, inSize: true });
+}
+
+// ---- draw call / 尺寸统计（每个物件单独放进空场景里渲染一次）
+const report = { draws: {}, sizes: {}, errors: window.__errors || [] };
+window.__report = report;
+const box = new THREE.Box3(), cnt = new THREE.Vector3(), siz = new THREE.Vector3();
+function measure(root) {
+  const parent = root.parent, pos = root.position.clone(), rot = root.rotation.clone(), scl = root.scale.clone();
+  const tmp = new THREE.Scene();
+  root.position.set(0, 0, 0); root.rotation.set(0, 0, 0); root.scale.set(1, 1, 1);
+  tmp.add(root);
+  tmp.updateMatrixWorld(true);
+  box.setFromObject(root);
+  box.getCenter(cnt); box.getSize(siz);
+  const cam = new THREE.PerspectiveCamera(40, 1, 0.01, 50);
+  cam.position.set(cnt.x, cnt.y, cnt.z + Math.max(siz.x, siz.y, siz.z) * 3 + 0.3);
+  cam.lookAt(cnt);
+  renderer.render(tmp, cam);
+  const calls = renderer.info.render.calls;
+  const out = { calls, size: siz.toArray().map((v) => +v.toFixed(3)) };
+  parent.add(root); root.position.copy(pos); root.rotation.copy(rot); root.scale.copy(scl);
+  return out;
+}
+for (const it of items) {
+  if (!it.obj || it.inSize) continue;
+  it.obj.update && it.obj.update(1, 0.016, it.kind === "egg" ? {} : it.kind === "boat" ? { sail: 1 } : "idle");
+  const m = measure(it.root);
+  const id = it.root.userData.id + (it.kind === "pet" ? ":" + it.root.userData.variant : "");
+  report.draws[it.kind + ":" + id] = m.calls;
+  report.sizes[it.kind + ":" + id] = m.size;
+  it.sub = (it.sub || "") + ` · ${m.calls}dc · h${m.size[1].toFixed(2)}`;
+  const nl = label(it.title, it.sub, it.color, it.label.scale.x);
+  nl.position.copy(it.label.position);
+  it.label.parent.add(nl); it.label.parent.remove(it.label);
+}
+if (kitten) {
+  kitten.root.updateMatrixWorld(true);
+  report.sizes.kitten = box.setFromObject(kitten.root).getSize(siz).toArray().map((v) => +v.toFixed(3));
+  report.sizes.dino = box.setFromObject(dino.root).getSize(siz).toArray().map((v) => +v.toFixed(3));
+}
+// 检查 userData.what 都打上了
+let untagged = 0;
+for (const it of items) if (it.obj) it.root.traverse((o) => { if (o.isMesh || o.isPoints || o.isSprite) if (!o.userData.what) untagged++; });
+report.untagged = untagged;
+console.log("REPORT", JSON.stringify(report));
+
+// ---- 相机
+const totalH = -rowY, elev = THREE.MathUtils.degToRad(+(params.get("elev") ?? 12));
+function placeCam() {
+  const tn = Math.tan(THREE.MathUtils.degToRad(15));
+  let W = 0;
+  for (const r of rows) W = Math.max(W, ...r.list.map((it) => Math.abs(it.root.parent.position.x) * 2 + (it.w || 0.6)));
+  const fit = Math.max((totalH + 0.1) / (2 * tn), W / (2 * tn * camera.aspect)) * 1.02;
+  controls.target.set(0, -totalH / 2, 0);
+  camera.position.set(0, controls.target.y + Math.sin(elev) * fit, Math.cos(elev) * fit);
+  controls.update();
+}
+
+// ---- 按钮：动画状态、蛋、帆
+const pick = (k, d) => (params.has(k) ? +params.get(k) : d);
+const st = { state: params.get("state") || "idle", wobble: pick("wobble", -1), crack: pick("crack", -1), sail: pick("sail", -1), anim: true };
+const bar = document.getElementById("bar");
+const btns = {};
+const btn = (lab, fn, key) => { const b = document.createElement("button"); b.textContent = lab; b.onclick = () => { fn(); refresh(); }; bar.appendChild(b); if (key) btns[key] = b; };
+const refresh = () => { for (const [k, b] of Object.entries(btns)) b.classList.toggle("on", k === "s:" + st.state); };
+for (const s of ["idle", "walk", "hop", "sleep", "eat", "happy", "wave", "talk"]) btn(s, () => { st.state = s; }, "s:" + s);
+btn("蛋:自动", () => { st.wobble = -1; st.crack = -1; });
+btn("蛋:静", () => { st.wobble = 0; st.crack = 0; });
+btn("蛋:摇", () => { st.wobble = 1; st.crack = 0; });
+btn("蛋:裂", () => { st.wobble = 0.5; st.crack = 0.6; });
+btn("蛋:开", () => { st.wobble = 0; st.crack = 1; });
+btn("帆:自动", () => { st.sail = -1; });
+btn("收帆", () => { st.sail = 0; });
+btn("升帆", () => { st.sail = 1; });
+btn("暂停", () => { st.anim = !st.anim; });
+for (const [k, deg] of Object.entries({ "正面": 0, "3/4": 40, "侧面": 90, "背面": 180 })) btn(k, () => { for (const it of items) if (it.obj && !it.inSize) it.root.rotation.y = THREE.MathUtils.degToRad(deg); });
+refresh();
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  placeCam();
+}
+addEventListener("resize", resize);
+resize();
+
+const clock = new THREE.Clock();
+const fixedT = params.has("t") ? +params.get("t") : null;
+let t = fixedT ?? 0, frames = 0, fpsT = 0;
+const stat = document.getElementById("stat");
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta());
+  if (st.anim && fixedT == null) t += dt;
+  const egg = { wobble: st.wobble < 0 ? Math.max(0, Math.sin(t * 0.6)) : st.wobble, crack: st.crack < 0 ? Math.max(0, Math.min(1, (t % 8) / 6)) : st.crack };
+  const sail = st.sail < 0 ? 0.5 + 0.5 * Math.sin(t * 0.5) : st.sail;
+  for (const it of items) {
+    if (!it.obj) continue;
+    if (it.kind === "egg") it.obj.update(t, fixedT != null ? 0.016 : dt, egg);
+    else if (it.kind === "boat") it.obj.update(t, dt, { sail });
+    else it.obj.update(t, fixedT != null ? 1 : dt, st.state);
+  }
+  frames++; fpsT += dt;
+  if (fpsT > 0.5) { stat.textContent = `${Math.round(frames / fpsT)} fps · ${renderer.info.render.calls} draws on screen · state=${st.state}`; frames = 0; fpsT = 0; }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
