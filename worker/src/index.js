@@ -17,6 +17,19 @@
 // POST /farm {who, act, plot, crop?}  种菜：plant（有种子用种子，没有就花星星买）/ water（每块地每天一次）/ harvest（浇够天数才能收）。
 // GET  /qa                 每日一问：今天的问题、最近 14 天的问答（答案是密文）。回答走 POST /events {kind:"answer", item:日期, box}。
 // GET  /world              两座城市此刻的天气和时区（Open-Meteo，后端代取，缓存 20 分钟；坐标在密钥 CITIES 里）。
+// GET  /rt  (Upgrade: websocket)  实时通道，转给 Durable Object「Room」（全站只有一个实例 idFromName("nest")）。
+//      不走 Authorization 头（浏览器 WebSocket 设不了头），令牌也不进 URL：连上后 5 秒内第一条消息必须是
+//      {"t":"auth","token":"<64 位十六进制>","who":"me"|"her"}，校验方式和 Bearer 一样（sha256 对 ACCESS_HASH），失败关闭 4001。
+//      Origin 必须在 ALLOWED_ORIGINS 里。协议：
+//        服务器 → {"t":"welcome","online":{me,her}}            认证成功
+//        双向   {"t":"pos","x","z"}  → 转发给其他连接 {"t":"pos","who","x","z"}（|x|,|z| < 10）
+//        双向   {"t":"act","kind","item"?} → 转发给其他连接 {"t":"act","who","kind","item"}（临时动作，不入库）
+//        客户端 {"t":"ping"} → {"t":"pong"}（运行时自动回，不唤醒 DO）
+//        服务器 → {"t":"presence","online":{me,her}}          某人第一个连接上线 / 最后一个连接下线
+//        服务器 → {"t":"ev","who","kind","id"}                 有新的写入（/events POST、/fish、/gacha、/farm），页面马上拉一次 /events
+//      每个连接每秒最多约 20 条、每条最多 512 字节，多的直接丢掉。GET /events 的返回带 rt: true 表示有这个通道。
+
+import { DurableObject } from "cloudflare:workers";
 
 const KINDS = new Set(["feed", "angry", "hit", "calm", "sorry", "flower", "note", "nudge", "buy", "place", "mood", "sleep", "wake", "act", "answer", "night", "tuck", "wear", "move"]);
 const MOODS = new Set(["happy", "tired", "miss", "angry", "sleepy"]);
@@ -92,6 +105,7 @@ export default {
     const cors = corsHeaders(req, env);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     const url = new URL(req.url);
+    if (url.pathname === "/rt") return roomConnect(req, env);
     if (!["/events", "/push-test", "/subscribe", "/wallet", "/mint", "/fish", "/gacha", "/farm", "/qa", "/world"].includes(url.pathname)) return json({ error: "not found" }, 404, cors);
     if (url.pathname === "/mint") {
       if (req.method !== "POST" || !(await sysAuthorized(req, env))) return json({ error: "unauthorized" }, 401, cors);
@@ -112,6 +126,7 @@ export default {
       const r = url.pathname === "/gacha" ? await gacha(env, b.who, b.pay === true) : await farm(env, b);
       if (r.error) return json(r, r.status || 400, cors);
       ctx.waitUntil(push(env, { who: b.who, kind: url.pathname.slice(1), item: r.prize || r.act }).catch(() => {}));
+      ctx.waitUntil(notifyRoom(env, { who: b.who, kind: url.pathname.slice(1), id: r.id ?? null })); // /farm 的返回没有 id，传 null
       return json(r, 201, cors);
     }
     if (url.pathname === "/fish" && req.method === "POST") {
@@ -121,6 +136,7 @@ export default {
       const r = await fish(env, b.who, b.pay === true);
       if (r.error) return json(r, r.status, cors);
       ctx.waitUntil(push(env, { who: b.who, kind: "fish", item: r.catch }).catch(() => {}));
+      ctx.waitUntil(notifyRoom(env, { who: b.who, kind: "fish", id: r.id }));
       return json(r, 201, cors);
     }
 
@@ -145,7 +161,7 @@ export default {
       const presence = Object.fromEntries(seen.map((x) => [x.k.slice(5), Number(x.v)]));
       const { results } = await env.DB.prepare(
         "SELECT id, ts, who, kind, item, n, box FROM events WHERE id > ? ORDER BY id DESC LIMIT 200").bind(since).all();
-      return json({ events: results.reverse(), now: Date.now(), presence }, 200, cors);
+      return json({ events: results.reverse(), now: Date.now(), presence, rt: true }, 200, cors);
     }
 
     if (req.method === "POST") {
@@ -183,6 +199,7 @@ export default {
       const r = await env.DB.prepare("INSERT INTO events (ts, who, kind, item, n, box) VALUES (?, ?, ?, ?, ?, ?)")
         .bind(ts, e.who, e.kind, e.item ?? null, e.n ?? null, e.box ?? null).run();
       ctx.waitUntil(Promise.all([push(env, e), rewards(env, e)]).catch(() => {}));
+      ctx.waitUntil(notifyRoom(env, { who: e.who, kind: e.kind, id: r.meta.last_row_id }));
       return json({ id: r.meta.last_row_id, ts }, 201, cors);
     }
     return json({ error: "method not allowed" }, 405, cors);
@@ -216,8 +233,13 @@ async function sha256hex(s) {
 
 async function authorized(req, env) {
   const m = /^Bearer ([0-9a-f]{64})$/.exec(req.headers.get("authorization") || "");
-  if (!m || !env.ACCESS_HASH) return false;
-  const got = await sha256hex(m[1]);
+  return !!m && tokenOk(m[1], env);
+}
+
+// 令牌校验（HTTP 的 Bearer 和 WebSocket 的 auth 消息共用）：sha256(令牌) 和 ACCESS_HASH 做定长比较。
+async function tokenOk(token, env) {
+  if (typeof token !== "string" || !/^[0-9a-f]{64}$/.test(token) || !env.ACCESS_HASH) return false;
+  const got = await sha256hex(token);
   const want = env.ACCESS_HASH.trim().toLowerCase();
   let diff = got.length ^ want.length;
   for (let i = 0; i < Math.min(got.length, want.length); i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
@@ -529,3 +551,212 @@ async function vapidAuth(env, endpoint) {
   const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(head + "." + body));
   return `vapid t=${head}.${body}.${b64url(sig)}, k=${env.VAPID_PUBLIC}`;
 }
+
+// ---------------------------------------------------------------- 实时同步（Durable Object + WebSocket 休眠 API）
+// 全站只有一个房间（idFromName("nest")），两个人的所有标签页 / 设备都连到这里。
+// 用休眠 API（ctx.acceptWebSocket）：没有消息的时候 DO 可以被逐出内存、不计时长，连接不会断；
+// 所以每个连接的状态（who / 是否已认证 / 连上的时间）放在 attachment 里，而不是对象字段。
+// 内存里的东西（限流桶、上次广播的在线状态）丢了也没关系：限流桶重新开始，在线状态从存储里读回来。
+const RT_AUTH_MS = 5000;        // 连上后多久内必须发 auth
+const RT_MAX_BYTES = 512;       // 单条消息上限
+const RT_RATE = 20;             // 每个连接每秒最多 20 条（令牌桶，容量也是 20）
+const RT_MAX_SOCKETS = 32;      // 房间里最多这么多连接
+const RT_MAX_PENDING = 8;       // 还没认证的连接最多这么多（防止没有令牌的人占满房间）
+const RT_KIND_RE = /^[a-z_]{1,16}$/;
+const RT_PING = '{"t":"ping"}', RT_PONG = '{"t":"pong"}';
+
+const roomStub = (env) => env.ROOM.get(env.ROOM.idFromName("nest"));
+
+function originAllowed(req, env) {
+  const origin = req.headers.get("origin") || "";
+  return !!origin && (env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).includes(origin);
+}
+
+// GET /rt：检查 Upgrade 和 Origin，然后整个请求转给房间。
+async function roomConnect(req, env) {
+  if (req.method !== "GET" || (req.headers.get("upgrade") || "").toLowerCase() !== "websocket")
+    return new Response("expected websocket", { status: 426, headers: { upgrade: "websocket" } });
+  if (!originAllowed(req, env)) return new Response("forbidden origin", { status: 403 });
+  if (!env.ROOM) return new Response("realtime unavailable", { status: 503 });
+  return roomStub(env).fetch(req);
+}
+
+// 写入成功后通知房间（放在 ctx.waitUntil 里）。任何错误都吞掉：实时通道只是锦上添花，绝不能让写入失败。
+async function notifyRoom(env, ev) {
+  try {
+    if (!env.ROOM) return;
+    await roomStub(env).fetch("https://room/notify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ who: ev.who, kind: ev.kind, id: Number.isInteger(ev.id) ? ev.id : null }),
+    });
+  } catch {}
+}
+
+export class Room extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.buckets = new WeakMap();  // ws → { tok, t }：限流令牌桶（只在内存里）
+    this.authing = new WeakMap();  // ws → Promise：auth 正在校验时，后面来的消息排队等它
+    this.lastOnline = null;        // 上次广播的在线状态（内存缓存，真值在 storage 的 "online"）
+    // 心跳：内容恰好是 {"t":"ping"} 的消息由运行时直接回 {"t":"pong"}，不唤醒 DO、不计费时长。
+    try { ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(RT_PING, RT_PONG)); } catch {}
+  }
+
+  async fetch(req) {
+    const url = new URL(req.url);
+    // 内部接口：只有主 Worker 通过 stub 能调到（外部请求只会以 /rt 路径转进来）
+    if (url.pathname === "/notify" && req.method === "POST") {
+      let b;
+      try { b = await req.json(); } catch { return new Response("bad json", { status: 400 }); }
+      if (!b || typeof b.who !== "string" || b.who.length > 8 || typeof b.kind !== "string" || !RT_KIND_RE.test(b.kind))
+        return new Response("bad notify", { status: 400 });
+      this.broadcast({ t: "ev", who: b.who, kind: b.kind, id: Number.isInteger(b.id) ? b.id : null });
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname === "/rt" && (req.headers.get("upgrade") || "").toLowerCase() === "websocket") {
+      const all = this.ctx.getWebSockets();
+      const pending = all.filter((s) => !this.att(s).authed).length;
+      if (all.length >= RT_MAX_SOCKETS || pending >= RT_MAX_PENDING) return new Response("room full", { status: 503 });
+      const [client, server] = Object.values(new WebSocketPair());
+      this.ctx.acceptWebSocket(server);
+      const at = Date.now();
+      server.serializeAttachment({ authed: false, at });
+      await this.armAuthAlarm(at + RT_AUTH_MS);
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    return new Response("not found", { status: 404 });
+  }
+
+  att(ws) {
+    try { return ws.deserializeAttachment() || {}; } catch { return {}; }
+  }
+
+  // ---- 收消息
+  async webSocketMessage(ws, msg) {
+    // auth 的 sha256 是异步的，期间同一个连接的后续消息先排队，保证顺序
+    const wait = this.authing.get(ws);
+    if (wait) await wait;
+    if (ws.readyState !== 1) return; // 已经被关了（比如认证失败）
+    const a = this.att(ws);
+    if (!a.authed) {
+      const p = this.handleAuth(ws, msg, a);
+      this.authing.set(ws, p);
+      try { await p; } finally { this.authing.delete(ws); }
+      return;
+    }
+    if (!this.allow(ws)) return;                                   // 超速：丢掉
+    if (typeof msg !== "string" || byteLen(msg) > RT_MAX_BYTES) return; // 二进制或太大：丢掉
+    let m;
+    try { m = JSON.parse(msg); } catch { return; }
+    if (!m || typeof m !== "object") return;
+    if (m.t === "pos") {
+      const { x, z } = m;
+      if (!(typeof x === "number" && typeof z === "number" && Number.isFinite(x) && Number.isFinite(z) && Math.abs(x) < 10 && Math.abs(z) < 10)) return;
+      this.broadcast({ t: "pos", who: a.who, x: round3(x), z: round3(z) }, ws);
+    } else if (m.t === "act") {
+      if (typeof m.kind !== "string" || !RT_KIND_RE.test(m.kind)) return;
+      if (m.item != null && (typeof m.item !== "string" || m.item.length > 24)) return;
+      this.broadcast({ t: "act", who: a.who, kind: m.kind, item: m.item ?? null }, ws);
+    } else if (m.t === "ping") {
+      // 正常情况下 ping 被运行时自动回复，走到这里说明格式不完全一样（比如多了空格），手动回
+      safeSend(ws, RT_PONG);
+    }
+    // 其他类型（包括重复的 auth）直接忽略
+  }
+
+  async handleAuth(ws, msg, a) {
+    let m = null;
+    if (typeof msg === "string" && byteLen(msg) <= RT_MAX_BYTES) { try { m = JSON.parse(msg); } catch {} }
+    // 超过 5 秒才来的 auth 也拒绝（alarm 万一晚了，这里兜底）
+    const ok = Date.now() - (a.at || 0) <= RT_AUTH_MS && m && m.t === "auth" && (m.who === "me" || m.who === "her") && (await tokenOk(m.token, this.env));
+    if (!ok) { safeClose(ws, 4001, "unauthorized"); return; }
+    if (ws.readyState !== 1) return; // 校验期间对方断了
+    ws.serializeAttachment({ who: m.who, authed: true, at: a.at });
+    const online = this.online();
+    safeSend(ws, JSON.stringify({ t: "welcome", online }));
+    await this.syncPresence(online); // 这个人的第一个连接 → 给所有人广播 presence
+  }
+
+  // 令牌桶：每秒补 RT_RATE 个，最多攒 RT_RATE 个
+  allow(ws) {
+    const now = Date.now();
+    let b = this.buckets.get(ws);
+    if (!b) { b = { tok: RT_RATE, t: now }; this.buckets.set(ws, b); }
+    b.tok = Math.min(RT_RATE, b.tok + ((now - b.t) * RT_RATE) / 1000);
+    b.t = now;
+    if (b.tok < 1) return false;
+    b.tok -= 1;
+    return true;
+  }
+
+  // ---- 断开
+  async webSocketClose(ws, code, reason) {
+    // 回一个 close 完成握手（1005/1006 这种保留码不能发，就用默认）
+    try { ws.close(code >= 1000 && code < 5000 && code !== 1005 && code !== 1006 && code !== 1015 ? code : 1000, "bye"); } catch {}
+    await this.gone(ws);
+  }
+  async webSocketError(ws) {
+    try { ws.close(1011, "error"); } catch {}
+    await this.gone(ws);
+  }
+  async gone(ws) {
+    this.buckets.delete(ws);
+    if (this.att(ws).authed) await this.syncPresence(this.online(ws)); // 这个人的最后一个连接 → 广播
+  }
+
+  // ---- 认证超时：用 alarm 而不是 setTimeout（DO 休眠后 setTimeout 会丢）。
+  // 注意：在 alarm 里 close 时，4001 关闭帧会立刻发出去，但运行时要等 DO 空闲以后才断开 TCP（本地实测 10–20 秒），
+  // 所以有的客户端 onclose 会晚一点触发。服务器这边连接马上就从 getWebSockets() 里消失，不影响别人。
+  async armAuthAlarm(due) {
+    const cur = await this.ctx.storage.getAlarm();
+    if (cur == null || cur > due) await this.ctx.storage.setAlarm(due);
+  }
+  async alarm() {
+    const now = Date.now();
+    let next = Infinity;
+    for (const ws of this.ctx.getWebSockets()) {
+      const a = this.att(ws);
+      if (a.authed || this.authing.has(ws)) continue;
+      const due = (a.at || 0) + RT_AUTH_MS;
+      if (due <= now + 50) safeClose(ws, 4001, "auth timeout");
+      else next = Math.min(next, due);
+    }
+    if (next < Infinity) await this.ctx.storage.setAlarm(next);
+  }
+
+  // ---- 在线状态：每个 who 至少有一个已认证、还开着的连接就算在线
+  online(exclude) {
+    const o = { me: false, her: false };
+    for (const s of this.ctx.getWebSockets()) {
+      if (s === exclude || s.readyState !== 1) continue;
+      const a = this.att(s);
+      if (a.authed && (a.who === "me" || a.who === "her")) o[a.who] = true;
+    }
+    return o;
+  }
+  // 和上次广播的比，变了才广播并记下来。这样"第一个连上 / 最后一个断开"自然只广播一次，
+  // close 和 error 都触发也不会重复。
+  async syncPresence(online) {
+    if (!this.lastOnline) this.lastOnline = (await this.ctx.storage.get("online")) || { me: false, her: false };
+    if (this.lastOnline.me === online.me && this.lastOnline.her === online.her) return;
+    this.lastOnline = online;
+    await this.ctx.storage.put("online", online);
+    this.broadcast({ t: "presence", online });
+  }
+
+  // 发给所有已认证的连接（except 除外）
+  broadcast(obj, except) {
+    const s = JSON.stringify(obj);
+    for (const ws of this.ctx.getWebSockets()) {
+      if (ws === except || ws.readyState !== 1 || !this.att(ws).authed) continue;
+      safeSend(ws, s);
+    }
+  }
+}
+
+const round3 = (v) => Math.round(v * 1000) / 1000;
+// UTF-8 字节数；短字符串（≤170 个 UTF-16 单元）最多 510 字节，不用真的编码
+const byteLen = (s) => (s.length <= 170 ? s.length : new TextEncoder().encode(s).length);
+function safeSend(ws, s) { try { ws.send(s); } catch {} }
+function safeClose(ws, code, reason) { try { ws.close(code, reason); } catch {} }

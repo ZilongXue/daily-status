@@ -14,6 +14,16 @@ binding = "DB"
 database_name = "nest"
 database_id = "a61f9f69-257b-48fd-8285-80ee9bd051c8"
 
+# 实时同步：Durable Object「Room」（WebSocket 休眠 API，全站一个实例 idFromName("nest")）。
+# 免费套餐的 DO 只能用 SQLite 存储，所以用 new_sqlite_classes；第一次 `wrangler deploy` 会自动应用这个迁移。
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
+
 # 密钥（不写在这里，用 `wrangler secret put` 设置）：
 #   ACCESS_HASH  = sha256(访问令牌) 的十六进制；令牌由页面密码派生，见 ../publish.py --api-hash
 #   VAPID_PRIVATE_JWK = 网页推送的 VAPID 私钥（JWK），本地副本在 ../state/vapid_private.jwk（不进仓库）

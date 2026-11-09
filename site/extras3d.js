@@ -2,14 +2,15 @@
 // 模型都在各自的模块里（gacha3d / farm3d / xmas3d / outfit3d / weather3d），这里只负责摆放和编排。
 // 任何一个模块加载失败都只会少那一块，不影响别的。
 import * as THREE from "three";
-import { FARM, heightAt } from "./island3d.js?v=8";
+import { FARM, heightAt } from "./island3d.js?v=9";
 
-const V = "?v=8";
+const V = "?v=9";
 const load = (m) => import(`./${m}.js${V}`).catch((e) => { console.warn(m, e); return null; });
 export const GACHA_SPOT = { x: 2.95, z: 1.75 };
 
 export async function createExtras(ctx) {
   const { world, toon, outlined, tag, W, cast, dino, textSprite, screenOf } = ctx;
+  const setFocus = ctx.setFocus || (() => {}), clearFocus = ctx.clearFocus || (() => {});
   const mctx = { toon, outlined };
   const [G, F, X, O, WX] = await Promise.all(["gacha3d", "farm3d", "xmas3d", "outfit3d", "weather3d"].map(load));
   const updaters = [];
@@ -34,6 +35,7 @@ export async function createExtras(ctx) {
     const cap = G.buildCapsule(c1, c2, mctx);
     const t0 = T;
     spinning = { k: 0 };
+    setFocus(new THREE.Vector3(GACHA_SPOT.x, 0.9, GACHA_SPOT.z), 6.5);
     // 转把手
     await new Promise((r) => { spinning.done = r; spinning.t0 = T; });
     // 胶囊从出口滚出来、跳起来、打开
@@ -76,6 +78,7 @@ export async function createExtras(ctx) {
     const at = screenOf(world.localToWorld(preview.position.clone()));
     dispatchEvent(new CustomEvent("nest:gacha-reveal", { detail: { ...result, ...at } }));
     await wait(2.4);
+    clearFocus();
     world.remove(cap.root); world.remove(preview);
     void t0;
   }
@@ -117,6 +120,7 @@ export async function createExtras(ctx) {
     world.worldToLocal(p);
     can.root.position.copy(p).add(new THREE.Vector3(-0.32, 0.55, 0));
     world.add(can.root, drops.root);
+    setFocus(p.clone().setY(p.y + 0.2), 6.5);
     const t0 = T, sp = new THREE.Vector3();
     let played = false;
     await new Promise((r) => updaters.push(function tilt(t, dt) {
@@ -130,6 +134,7 @@ export async function createExtras(ctx) {
       if (k >= 1) { updaters.splice(updaters.indexOf(tilt), 1); r(); }
     }));
     world.remove(can.root, drops.root);
+    setTimeout(clearFocus, 600);
   }
   async function farmHarvest(i, emoji) {
     if (!plot || !F) return;

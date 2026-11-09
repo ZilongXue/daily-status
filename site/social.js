@@ -184,7 +184,8 @@
     window.NEST_MODE = s.angry && me === "her" ? "angry" : "normal";
     window.NEST3D && window.NEST3D.setAngry(s.angry);
     window.NEST3D && window.NEST3D.setFlowers(s.flowers);
-    const herOnline = me === "her" || (presence.her && Date.now() - presence.her < 3 * 60000);
+    window.NEST_WHO = me; // scene3d 用：点草地时走的是谁的角色
+    const herOnline = me === "her" || isOnline("her");
     window.NEST3D && window.NEST3D.setHer && window.NEST3D.setHer({ online: !!herOnline, asleep: s.asleep, mood: s.mood });
     $("#her-status").innerHTML = herStatus(s, herOnline);
     syncWorld();
@@ -238,7 +239,7 @@
     const st = s.streak > 1 ? ` · 🌙 晚安连击 ${s.streak} 天` : "";
     if (me === "her") return (s.mood ? `你现在的心情：${MOODS[s.mood][1]} ${MOODS[s.mood][0]}` : "") + st;
     const bits = [];
-    bits.push(s.asleep ? `😴 ${HER()}睡着了` : online ? `🟢 ${HER()}在岛上` : presence.her ? `${HER()} ${ago(new Date(presence.her).toISOString())}来过` : "");
+    bits.push(s.asleep ? `😴 ${HER()}睡着了` : online ? `🟢 ${HER()}在岛上${rtLive() ? "（实时）" : ""}` : presence.her ? `${HER()} ${ago(new Date(presence.her).toISOString())}来过` : "");
     if (s.mood && !s.asleep) bits.push(`心情：${MOODS[s.mood][1]} ${MOODS[s.mood][0]}`);
     return bits.filter(Boolean).join(" · ") + st;
   }
@@ -361,7 +362,7 @@
     const b = ev.target.closest("button");
     if (!b) return;
     if (b.dataset.panel) { openPanel(b.dataset.panel); return; }
-    if (b.dataset.who) { me = b.dataset.who; store.set(WHO_KEY, me); if (me === "me") await checkPush(); render(); renderTimeline(); return; }
+    if (b.dataset.who) { me = b.dataset.who; store.set(WHO_KEY, me); if (me === "me") await checkPush(); render(); renderTimeline(); startRealtime().catch(() => {}); return; }
     if (b.dataset.weapon) { weapon = b.dataset.weapon; render(); sfx("pop"); return; }
     if (b.dataset.doact) {
       const k = b.dataset.doact;
@@ -446,6 +447,7 @@
     $("#combo").textContent = combo > 1 ? `${combo} 连击！` : "";
     window.NEST3D && window.NEST3D.react("hit");
     if (combo === 1 && window.NEST3D && window.NEST3D.play) window.NEST3D.play("hit", "her", w.emoji);
+    if (rtLive()) RT().sendAct("hit", weapon);
     sfx("thud"); buzz(30);
     pow(x, y, w.emoji);
     say(["呜…", "我错了我错了 😭", "轻点轻点！", "痛痛痛 😵", "再也不敢了…", "饶命啊～"][Math.floor(Math.random() * 6)]);
@@ -478,7 +480,7 @@
     if (ev.detail.what === "her") {
       const s = state();
       if (me === "her") say(["喵～ 这是你哦 🐱", "小猫在等你陪它玩", "摸摸小猫 💕"][Math.floor(Math.random() * 3)]);
-      else say(herStatus(s, presence.her && Date.now() - presence.her < 3 * 60000) || `这是${HER()}的小猫 🐱`);
+      else say(herStatus(s, isOnline("her")) || `这是${HER()}的小猫 🐱`);
       hearts(ev.detail.x, ev.detail.y, 6);
     }
     if (ev.detail.what === "pony") { say(["小马：咴儿～ 🐴", "小马想去兜风", "小马蹭了蹭你 💕"][Math.floor(Math.random() * 3)]); sfx("pop"); }
@@ -891,7 +893,7 @@
     R.setXmas && R.setXmas(isXmasSeason());
     if (!worldInfo || !R.setWorld) return;
     const other = me === "her" ? "me" : "her";
-    const otherOnline = presence[other] && Date.now() - presence[other] < 3 * 60000;
+    const otherOnline = isOnline(other);
     R.setWorld({ mine: worldInfo[me], theirs: worldInfo[other], theirName: me === "her" ? "他" : HER(), bothOnline: !!otherOnline });
   }
   addEventListener("nest:tap", (ev) => {
@@ -899,6 +901,38 @@
     if (ev.detail.what === "farm") { if (panel !== "farm") openPanel("farm"); say("菜地：记得每天浇水 💧"); }
     if (ev.detail.what === "xmas") { say(["圣诞快乐 🎄", "Merry Christmas ✨", "今年的圣诞树亮啦 🎄"][Math.floor(Math.random() * 3)]); hearts(ev.detail.x, ev.detail.y, 8); }
   });
+
+  /* ------------------------------------------------------------ 实时连接（WebSocket）：走路、在线、新动态秒级同步；断了就靠 12 秒轮询兜底 */
+  const RT = () => window.NEST_RT;
+  const rtLive = () => !!(RT() && RT().connected);
+  function isOnline(who) {
+    if (rtLive() && RT().online) return !!RT().online[who];
+    return !!(presence[who] && Date.now() - presence[who] < 3 * 60000);
+  }
+  let rtStarted = false;
+  async function startRealtime() {
+    const rt = RT();
+    if (!rt || !API || !me || rtStarted) return; // 还没选身份就等选了再连
+    rtStarted = true;
+    rt.on("ev", () => poll());
+    rt.on("pos", (m) => { if (m.who !== me && window.NEST3D && window.NEST3D.remoteWalk) window.NEST3D.remoteWalk(m.who, m.x, m.z); });
+    rt.on("act", (m) => {
+      if (m.who === me || !window.NEST3D) return;
+      if (m.kind === "hit") { window.NEST3D.react("hit"); const p = headPos(); pow(p.x, p.y, (WEAPONS[m.item] || WEAPONS.fist).emoji); }
+    });
+    const onPresence = (m) => {
+      const other = me === "her" ? "me" : "her";
+      const was = !!(m.prev && m.prev[other]);
+      render();
+      if (m.online && m.online[other] && !was) say(`${other === "her" ? HER() : "他"}来岛上啦 👋`);
+    };
+    let last = {};
+    rt.on("presence", (online) => { onPresence({ online, prev: last }); last = { ...(online || {}) }; });
+    rt.on("welcome", (m) => { last = { ...(m.online || {}) }; render(); });
+    rt.on("close", () => render());
+    rt.connect({ url: API.replace(/^http/, "ws") + "/rt", token: await getToken(), who: me });
+  }
+  addEventListener("nest:walk", (ev) => { if (rtLive()) RT().sendPos(ev.detail.x, ev.detail.z); });
 
   /* ------------------------------------------------------------ boot：解锁后才开始 */
   async function start() {
@@ -911,6 +945,7 @@
     if (window.NEST3D && window.NEST3D.extrasReady) window.NEST3D.extrasReady.then(() => { applyWallet(); syncWorld(); });
     loadWorld();
     setInterval(() => { if (!document.hidden) loadWorld(); }, 15 * 60000);
+    startRealtime().catch(() => {});
     await poll(true);
     setInterval(() => { if (!document.hidden) poll(); }, 12000);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) poll(); });

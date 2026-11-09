@@ -4,10 +4,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=8";
-import { buildDino } from "./dino3d.js?v=8";
-import { createDecor, encodePos } from "./decor3d.js?v=8";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=8";
+import { buildPet, SPECIES } from "./pet3d.js?v=9";
+import { buildDino } from "./dino3d.js?v=9";
+import { createDecor, encodePos } from "./decor3d.js?v=9";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=9";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -276,7 +276,7 @@ function applySky(h) {
 /* ---------------------------------------------------------------- pet */
 let pet = null;
 let kind = KINDS[store.get("nest.species")] ? store.get("nest.species") : "dino"; // 默认是她送的小恐龙
-const PET_SCALE = 1.4; // 小伙伴是主角，比岛上的东西大一号
+const PET_SCALE = 0.88; // 和岛上的东西比例协调（大约齐到小木屋的门）；互动时镜头会拉近
 const home = new THREE.Vector3(0.35, 0, 0.75);
 const walkTo = home.clone();
 let arriveCb = null, faceFn = null;
@@ -307,7 +307,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=8")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=9")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -324,7 +324,7 @@ function update() {
   const rec = t.recovery ?? 50;
   const c = BAND_HEX[t.band] ?? 0xb9a89c;
   crystalMat.color.setHex(c); crystalMat.emissive.setHex(c); crystalLight.color.setHex(c);
-  const k = 0.65 + 0.75 * (rec / 100);
+  const k = (0.65 + 0.75 * (rec / 100)) * 0.7;
   crystal.scale.set(k, k * 1.5, k);
   crystalLight.intensity = 1 + 3 * (rec / 100);
   // 没有活动数据（被藏起来了）时，花只是装饰
@@ -356,9 +356,9 @@ function placePet(force) {
   pet.sweat.visible = mood === "tired";
   if (sleeping) {
     // 侧躺在床上：头朝枕头（床的 -x），脸朝上偏向床外侧
-    pet.root.position.copy(bed.position).add(new THREE.Vector3(0.5, 0.62, 0).applyAxisAngle(UP, bed.rotation.y));
+    pet.root.position.copy(bed.position).add(new THREE.Vector3(0.45, 0.5, 0).applyAxisAngle(UP, bed.rotation.y));
     pet.root.quaternion.copy(bedQ).multiply(LIE[lieSide]);
-    pet.root.scale.setScalar(0.85);
+    pet.root.scale.setScalar(0.62);
   } else if (force || pet.root.scale.x !== PET_SCALE) {
     pet.root.position.copy(walkTo);
     pet.root.rotation.set(0, 0, 0);
@@ -385,7 +385,7 @@ function screenOf(v) {
   const p = v.clone().project(camera), r = renderer.domElement.getBoundingClientRect();
   return { x: r.left + (p.x + 1) / 2 * r.width, y: r.top + (1 - p.y) / 2 * r.height };
 }
-function headWorld() { return pet.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.35, 0)); }
+function headWorld() { return pet.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.22, 0)); }
 
 renderer.domElement.addEventListener("pointermove", (e) => {
   if (edit && edit.drag) { editMove(e); return; }
@@ -432,11 +432,12 @@ renderer.domElement.addEventListener("pointerup", (e) => {
     return;
   }
   if (what === "ground") {
-    if (mood === "sleep") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "ground-sleep", x: e.clientX, y: e.clientY } })); return; }
-    const p = world.worldToLocal(hit.point.clone());
-    p.y = 0;
-    if (p.length() > ISLAND_R - 0.9) p.setLength(ISLAND_R - 0.9);
-    walkTo.copy(p);
+    // 谁在看，点草地就让谁的角色走过去：她是小猫，他是小恐龙；位置实时发给对方
+    const herSide = window.NEST_WHO === "her" && cast;
+    if (!herSide && mood === "sleep") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "ground-sleep", x: e.clientX, y: e.clientY } })); return; }
+    const p = walkable(world.worldToLocal(hit.point.clone()));
+    if (herSide) cast.walkHer(p); else walkTo.copy(p);
+    dispatchEvent(new CustomEvent("nest:walk", { detail: { x: p.x, z: p.z } }));
     return;
   }
   if (what === "pet") {
@@ -448,6 +449,14 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   }
   dispatchEvent(new CustomEvent("nest:tap", { detail: { what, item: hit.object.userData.item, x: e.clientX, y: e.clientY } }));
 });
+
+// 草地上能走到的点：限制在平地上（不进河、不上崖、不下海），超出就往岛中心收
+function walkable(p) {
+  p.y = 0;
+  if (p.length() > 3.3) p.setLength(3.3);
+  for (let i = 0; i < 12 && Math.abs(W.heightAt(p.x, p.z)) > 0.02; i++) p.multiplyScalar(0.88);
+  return p;
+}
 
 /* ---------------------------------------------------------------- loop */
 const clock = new THREE.Clock();
@@ -461,7 +470,9 @@ function resize() {
   renderer.setSize(w, h);
   renderer.domElement.style.imageRendering = pixelMode ? "pixelated" : "auto";
   camera.aspect = w / h;
-  const off = camera.position.clone().sub(controls.target).setLength(w < 500 ? 21 : 16);
+  baseDist = w < 500 ? 21 : 16;
+  narrow = w < 500;
+  const off = camera.position.clone().sub(controls.target).setLength(baseDist);
   camera.position.copy(controls.target).add(off);
   camera.updateProjectionMatrix();
 }
@@ -488,7 +499,7 @@ function animate(t, dt) {
     const dist = tmp.length();
     if (dist > 0.05) {
       walking = true;
-      const step = Math.min(dist, dt * (mood === "tired" ? 0.8 : 1.6));
+      const step = Math.min(dist, dt * (mood === "tired" ? 0.6 : 1.15));
       P.root.position.addScaledVector(tmp.normalize(), step);
       const yaw = Math.atan2(tmp.x, tmp.z);
       P.root.rotation.y = lerpAngle(P.root.rotation.y, yaw, 0.2);
@@ -615,7 +626,7 @@ function animate(t, dt) {
   // ---- 水晶
   const head = headWorld();
   world.worldToLocal(head);
-  crystalWrap.position.set(head.x - 0.15, head.y + (sleep ? 0.9 : 1.05) + Math.sin(t * 2) * 0.08, head.z - 0.25);
+  crystalWrap.position.set(head.x - 0.1, head.y + (sleep ? 0.55 : 0.68) + Math.sin(t * 2) * 0.06, head.z - 0.16);
   crystal.rotation.y = t * 1.2;
 
   // ---- 花
@@ -631,17 +642,17 @@ function animate(t, dt) {
     s.visible = sleep;
     if (!sleep) return;
     const p = (t * 0.32 + i / 3) % 1;
-    s.position.set(head.x + 0.3 + p * 0.6, head.y + 0.3 + p * 1.2, head.z + 0.1);
+    s.position.set(head.x + 0.2 + p * 0.4, head.y + 0.2 + p * 0.8, head.z + 0.07);
     s.material.opacity = Math.sin(p * Math.PI);
-    s.scale.setScalar(0.22 + p * 0.25);
+    s.scale.setScalar(0.15 + p * 0.17);
   });
   sparks.forEach((s, i) => {
     s.visible = mood === "happy";
     if (!s.visible) return;
     const a = t * 0.8 + (i / sparks.length) * Math.PI * 2;
-    s.position.set(P.root.position.x + Math.cos(a) * 1.15, 0.5 + (i % 3) * 0.45 + Math.sin(t * 2 + i) * 0.1, P.root.position.z + Math.sin(a) * 1.15);
+    s.position.set(P.root.position.x + Math.cos(a) * 0.75, 0.3 + (i % 3) * 0.3 + Math.sin(t * 2 + i) * 0.07, P.root.position.z + Math.sin(a) * 0.75);
     const tw = Math.sin(t * 4 + i * 1.7) * 0.5 + 0.5;
-    s.material.opacity = tw; s.scale.setScalar(0.16 + tw * 0.14);
+    s.material.opacity = tw; s.scale.setScalar(0.11 + tw * 0.1);
   });
   if ((holding || (react.kind === "love" && since < dur)) && t - holdHeartTimer > 0.35) {
     holdHeartTimer = t;
@@ -652,9 +663,9 @@ function animate(t, dt) {
     const p = (t - s.userData.t0) / 1.4;
     s.visible = p >= 0 && p < 1;
     if (!s.visible) return;
-    s.position.set(head.x + s.userData.dx, head.y + 0.4 + p * 0.9, head.z + 0.2);
+    s.position.set(head.x + s.userData.dx * 0.65, head.y + 0.25 + p * 0.6, head.z + 0.13);
     s.material.opacity = Math.sin(p * Math.PI);
-    s.scale.setScalar(0.22 + p * 0.12);
+    s.scale.setScalar(0.15 + p * 0.08);
   });
 }
 function lerpAngle(a, b, k) {
@@ -677,27 +688,36 @@ function loop(now) {
   renderer.render(scene, camera);
 }
 
-// 钓鱼时镜头转到码头的斜侧面，看得清甩竿和浮漂；钓完再接着慢慢转
+// 镜头：平时是全景慢慢转；钓鱼时转到码头的斜侧面；两只角色互动 / 扭蛋 / 浇水时推近成特写，结束后再慢慢退回去
 const DOCK_VIEW = Math.atan2(-DOCK.dir.z + 0.7 * DOCK.dir.x, DOCK.dir.x + 0.7 * DOCK.dir.z);
 const baseTarget = controls.target.clone(), dockTarget = DOCK.base.clone().lerp(DOCK.tip, 0.55).setY(0.2);
-let wasFishing = false;
+let baseDist = 16, narrow = false, focusReq = null, wasActive = false;
+function setFocus(get, dist = 7.5, sec = 0) {
+  focusReq = { get: typeof get === "function" ? get : () => get, dist, until: sec ? performance.now() + sec * 1000 : Infinity };
+}
+function clearFocus() { focusReq = null; }
 function focusCamera() {
-  const f = !!(cast && cast.fishing());
-  if (f) {
-    controls.autoRotate = false;
-    const off = camera.position.clone().sub(controls.target);
-    const r = off.length(), th = lerpAngle(Math.atan2(off.x, off.z), DOCK_VIEW, 0.03), ph = Math.acos(off.y / r);
-    controls.target.lerp(dockTarget, 0.03);
-    camera.position.copy(controls.target).add(new THREE.Vector3(Math.sin(ph) * Math.sin(th), Math.cos(ph), Math.sin(ph) * Math.cos(th)).multiplyScalar(r));
-  } else {
-    if (wasFishing) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000);
-    if (controls.target.distanceToSquared(baseTarget) > 1e-4) {
-      const off = camera.position.clone().sub(controls.target);
-      controls.target.lerp(baseTarget, 0.04);
-      camera.position.copy(controls.target).add(off);
-    }
+  const fishing = !!(cast && cast.fishing());
+  if (focusReq && performance.now() > focusReq.until) focusReq = null;
+  if (edit) { wasActive = true; return; }
+  let wantT = baseTarget, wantD = baseDist, wantTh = null;
+  if (fishing) { wantT = dockTarget; wantD = baseDist * 0.8; wantTh = DOCK_VIEW; }
+  else if (focusReq) {
+    const p = focusReq.get();
+    if (p) { wantT = new THREE.Vector3(p.x, Math.max(0.35, p.y), p.z); wantD = focusReq.dist * (narrow ? 1.3 : 1); }
   }
-  wasFishing = f;
+  const active = fishing || !!focusReq;
+  if (active) { controls.autoRotate = false; clearTimeout(resumeTimer); }
+  const off = camera.position.clone().sub(controls.target);
+  let r = off.length();
+  const ph = Math.acos(Math.max(-1, Math.min(1, off.y / r)));
+  let th = Math.atan2(off.x, off.z);
+  if (wantTh != null) th = lerpAngle(th, wantTh, 0.03);
+  controls.target.lerp(wantT, active ? 0.07 : 0.035);
+  r += (wantD - r) * (active ? 0.07 : 0.035);
+  camera.position.copy(controls.target).add(new THREE.Vector3(Math.sin(ph) * Math.sin(th), Math.cos(ph), Math.sin(ph) * Math.cos(th)).multiplyScalar(r));
+  if (wasActive && !active) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 4000);
+  wasActive = active;
 }
 
 /* ---------------------------------------------------------------- buttons */
@@ -723,8 +743,8 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=8").then(({ createCast }) => {
-  cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf });
+const castReady = import("./cast3d.js?v=9").then(({ createCast }) => {
+  cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
   return cast;
@@ -785,8 +805,8 @@ window.NEST3D = {
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=8");
-      extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf });
+      const { createExtras } = await import("./extras3d.js?v=9");
+      extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;
   }),
@@ -813,6 +833,12 @@ window.NEST3D = {
     return out;
   },
   editing: () => !!edit,
+  // 对方的角色走到某处（实时同步来的）
+  remoteWalk(who, x, z) {
+    const p = walkable(new THREE.Vector3(x, 0, z));
+    if (who === "her") { if (cast) cast.walkHer(p); }
+    else if (mood !== "sleep") walkTo.copy(p);
+  },
 };
 
 /* ---------------------------------------------------------------- boot */

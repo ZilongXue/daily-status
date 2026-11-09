@@ -1,16 +1,19 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=8";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=8";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=9";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=9";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
-export const KITTEN_SCALE = 1.05;
-const PONY_SCALE = 1.0;
+export const KITTEN_SCALE = 0.68;
+const PONY_SCALE = 0.66;
+const GAP = 0.64;   // 两只角色互动时的距离跟着角色一起缩
+const SPEED = 0.72; // 走路速度也慢一点（腿短了）
 
 export function createCast(ctx) {
   const { world, toon, outlined, tag, W, DOCK, SEA_Y, dino, textSprite, screenOf } = ctx;
+  const setFocus = ctx.setFocus || (() => {}), clearFocus = ctx.clearFocus || (() => {});
   const lerp = (a, b, k) => a + (b - a) * k;
   const lerpAngle = (a, b, k) => { let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI; if (d < -Math.PI) d += Math.PI * 2; return a + d * k; };
   let T = 0; // 当前时间（秒），update 里更新
@@ -30,10 +33,10 @@ export function createCast(ctx) {
 
   // 演员：位置 / 目标 / 速度 / 朝向，move() 返回一个走到了才 resolve 的 promise
   const mkActor = (obj, speed) => ({ obj, target: obj.root.position.clone(), speed, face: null, walking: false, arrive: null });
-  const her = mkActor(kitten, 1.7), horse = mkActor(pony, 1.3);
+  const her = mkActor(kitten, 1.7 * SPEED), horse = mkActor(pony, 1.3 * SPEED);
   function move(a, p, speed) {
     a.target.copy(p).setY(0);
-    if (speed) a.speedNow = speed; else a.speedNow = a.speed;
+    a.speedNow = speed ? speed * SPEED : a.speed;
     return new Promise((res) => { a.arrive = res; });
   }
   const wait = (s) => new Promise((res) => waits.push({ at: T + s, res }));
@@ -42,12 +45,12 @@ export function createCast(ctx) {
   // 心情气泡（emoji 精灵），挂在小猫头顶
   const MOOD_EMOJI = { happy: "😊", tired: "😮‍💨", miss: "🥺", angry: "😤", sleepy: "😪" };
   const moodSprite = textSprite("😊", "#000", 96);
-  moodSprite.scale.setScalar(0.42);
+  moodSprite.scale.setScalar(0.3);
   moodSprite.visible = false;
   world.add(moodSprite);
   const zz = [0, 1, 2].map(() => { const s = textSprite("Z", "#6f7ad6"); s.visible = false; world.add(s); return s; });
   const prop = textSprite("🩴", "#000", 96); // 手上拿的东西（武器 / 食物 / 花）
-  prop.scale.setScalar(0.38); prop.visible = false;
+  prop.scale.setScalar(0.27); prop.visible = false;
   world.add(prop);
   const hearts = Array.from({ length: 8 }, () => { const s = textSprite("♥", "#ff6b8b"); s.visible = false; s.userData.t0 = -10; world.add(s); return s; });
   const stars = Array.from({ length: 10 }, () => { const s = textSprite("✦", "#ffc93c"); s.visible = false; s.userData.t0 = -10; world.add(s); return s; });
@@ -87,7 +90,17 @@ export function createCast(ctx) {
     busy: false,       // 正在演一段互动（这时不闲逛）
     pose: "stand",     // stand | sit | curl
   };
-  let wanderAt = 3;
+  let wanderAt = 3, manualUntil = 0;
+  // 她自己点草地（或者实时同步过来）让小猫走过去；之后 20 秒内不自己乱逛
+  function walkHer(p) {
+    if (F.state !== "idle" && F.fisher === "her") return;
+    if (S.busy) return;
+    if (S.riding) seatKitten(false);
+    her.face = null;
+    her.target.copy(p).setY(0);
+    her.speedNow = her.speed * 1.2;
+    manualUntil = T + 20;
+  }
 
   function seatKitten(on) {
     S.riding = on;
@@ -102,7 +115,7 @@ export function createCast(ctx) {
       world.worldToLocal(p);
       setRiding(kitten, false);
       world.add(kitten.root);
-      kitten.root.position.set(p.x, 0, p.z).add(new THREE.Vector3(0.6, 0, 0.3));
+      kitten.root.position.set(p.x, 0, p.z).add(new THREE.Vector3(0.4, 0, 0.2));
       kitten.root.scale.setScalar(KITTEN_SCALE);
       her.target.copy(kitten.root.position);
     }
@@ -121,7 +134,9 @@ export function createCast(ctx) {
   function enqueue(fn) {
     queue = queue.then(async () => {
       S.busy = true;
+      setFocus(() => herPos().add(dinoPos()).multiplyScalar(0.5).setY(0.4), 5.2);
       try { await fn(); } catch (e) { console.warn(e); }
+      clearFocus();
       S.busy = false; wanderAt = T + 4;
       dino.face(null); her.face = null; // 演完各自转回镜头
     });
@@ -130,21 +145,21 @@ export function createCast(ctx) {
   async function herGoToDino(gap = 1.05) {
     if (S.riding) { seatKitten(false); await wait(0.25); }
     S.pose = "stand";
-    const p = nearPoint(kitten.root.position, dinoPos(), gap);
+    const p = nearPoint(kitten.root.position, dinoPos(), gap * GAP);
     her.face = null;
     await move(her, p, 2.4);
     her.face = () => dinoPos();
     dino.face(() => kitten.root.position);
   }
   async function dinoGoToHer(gap = 1.15) {
-    const p = nearPoint(dinoPos(), herPos(), gap);
+    const p = nearPoint(dinoPos(), herPos(), gap * GAP);
     await dino.go(p);
     dino.face(() => herPos());
     her.face = () => dinoPos();
   }
   const anim = { kind: "", t0: -10, dur: 0 }; // 小猫自己的小动作
   const kAnim = (kind, dur) => { anim.kind = kind; anim.t0 = T; anim.dur = dur; return wait(dur); };
-  const headOf = (o) => o.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.45, 0));
+  const headOf = (o) => o.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.28, 0));
 
   const PLAYS = {
     // 她 → 他
@@ -199,7 +214,7 @@ export function createCast(ctx) {
     },
     async ride() { // 骑小马绕岛一圈
       if (!S.riding) {
-        const sp = nearPoint(kitten.root.position, pony.root.position.clone().setY(0), 0.55);
+        const sp = nearPoint(kitten.root.position, pony.root.position.clone().setY(0), 0.55 * GAP);
         await move(her, sp, 2.2);
         await kAnim("hop", 0.4);
         seatKitten(true);
@@ -442,7 +457,7 @@ export function createCast(ctx) {
     for (let i = waits.length - 1; i >= 0; i--) if (t >= waits[i].at) { waits[i].res(); waits.splice(i, 1); }
 
     // ---- 闲逛：在线时小猫在家附近溜达，小马在草地上慢慢走
-    if (!S.busy && F.state === "idle" && t > wanderAt) {
+    if (!S.busy && F.state === "idle" && t > wanderAt && t > manualUntil) {
       wanderAt = t + 5 + Math.random() * 6;
       if (!S.asleep && !S.riding && S.online) {
         const a = Math.random() * Math.PI * 2, r = 0.3 + Math.random() * 0.8;
@@ -455,10 +470,10 @@ export function createCast(ctx) {
       }
     }
     // 不在线 / 睡着：小猫趴在小马背上睡觉，小马在家待着
-    const napping = (S.asleep || !S.online) && !S.busy && F.fisher !== "her";
+    const napping = (S.asleep || !S.online) && !S.busy && F.fisher !== "her" && T > manualUntil;
     if (napping && !S.riding) {
       if (kitten.root.parent === world && kitten.root.position.distanceTo(pony.root.position) > 0.7) {
-        her.target.copy(nearPoint(kitten.root.position, pony.root.position.clone().setY(0), 0.5));
+        her.target.copy(nearPoint(kitten.root.position, pony.root.position.clone().setY(0), 0.5 * GAP));
         if (!her.walking && !her.arrive) { her.face = null; move(her, her.target, 1.6).then(() => { if ((S.asleep || !S.online) && !S.busy) seatKitten(true); }); }
       }
     }
@@ -541,14 +556,14 @@ export function createCast(ctx) {
     // ---- 头顶：心情 / Zzz / 手上的东西
     const hh = world.worldToLocal(headOf(K));
     moodSprite.visible = !!S.mood && !sleepy && !S.busy;
-    if (moodSprite.visible) moodSprite.position.set(hh.x + 0.3, hh.y + 0.25 + Math.sin(t * 2) * 0.05, hh.z);
+    if (moodSprite.visible) moodSprite.position.set(hh.x + 0.2, hh.y + 0.15 + Math.sin(t * 2) * 0.04, hh.z);
     zz.forEach((s, i) => {
       s.visible = sleepy;
       if (!sleepy) return;
       const p = (t * 0.3 + i / 3) % 1;
-      s.position.set(hh.x + 0.2 + p * 0.5, hh.y + p * 0.9, hh.z);
+      s.position.set(hh.x + 0.13 + p * 0.33, hh.y + p * 0.6, hh.z);
       s.material.opacity = Math.sin(p * Math.PI) * (S.asleep ? 1 : 0.6);
-      s.scale.setScalar(0.18 + p * 0.2);
+      s.scale.setScalar(0.12 + p * 0.13);
     });
     if (prop.visible) {
       const hand = K.arms[1].getWorldPosition(new THREE.Vector3());
@@ -559,9 +574,9 @@ export function createCast(ctx) {
       const p = (t - s.userData.t0) / 1.3;
       s.visible = p >= 0 && p < 1 && !!s.userData.at;
       if (!s.visible) continue;
-      s.position.set(s.userData.at.x + s.userData.dx * (0.5 + p), s.userData.at.y + p * 1.0, s.userData.at.z + s.userData.dz * (0.5 + p));
+      s.position.set(s.userData.at.x + s.userData.dx * 0.65 * (0.5 + p), s.userData.at.y + p * 0.65, s.userData.at.z + s.userData.dz * 0.65 * (0.5 + p));
       s.material.opacity = Math.sin(p * Math.PI);
-      s.scale.setScalar(0.2 + p * 0.15);
+      s.scale.setScalar(0.14 + p * 0.1);
     }
 
     // ---- 钓鱼
@@ -646,7 +661,7 @@ export function createCast(ctx) {
   }
 
   return {
-    update, play, setState, fish, pull, setBook,
+    update, play, setState, fish, pull, setBook, walkHer,
     fishing: () => F.state !== "idle",
     kittenScreen: () => screenOf(world.localToWorld(world.worldToLocal(headOf(kitten)))),
     kitten, pony,
