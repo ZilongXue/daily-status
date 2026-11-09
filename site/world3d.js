@@ -2,7 +2,22 @@
 // 全部程序生成，没有外部模型。scene3d.js 负责小伙伴和互动，这里只管环境。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=13";
+import { buildMainIsland, buildWater, heightAt as mainHeight, POOL, MAP, PATH_LINES, softRock } from "./island3d.js?v=14";
+import { buildHome, glowSprite, STONE_PATH, HOME, season } from "./home3d.js?v=14";
+import { cloudGeometry } from "./weather3d.js?v=14";
+
+// 二维值噪声（草丛成片、石头摆放用）
+const hash2 = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
+function vnoise2(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy), b = hash2(ix + 1, iy), c = hash2(ix, iy + 1), d = hash2(ix + 1, iy + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+function segD(px, pz, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az, t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz || 1)));
+  return Math.hypot(px - ax - dx * t, pz - az - dz * t);
+}
+const lineD = (x, z, pts) => { let d = Infinity; for (let i = 0; i < pts.length - 1; i++) d = Math.min(d, segD(x, z, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1])); return d; };
 
 export const SEA_Y = -0.85;   // 海面高度（草地表面是 y = 0）
 export const ISLAND_R = 3.25; // 草地的最小半径（装饰的位置都按这个算）
@@ -141,18 +156,44 @@ export function makeIsland({ R0, H = 0, seed = 1, cliff = () => 0, wob = 0.14, s
   return { geo, height, edge, shoreR };
 }
 
-// 地形材质：顶点色 + 卡通光照 + 下雪时草地部分变白
+// 地形材质：顶点色 + 卡通光照 + 下雪时草地部分变白。
+// 陡坡（岩壁）的颜色不用顶点色：网格是 0.085 一格的高度场，一面崖只有两三个顶点高，顶点色会被拉成一条条竖纹。
+// 改成在像素里按"世界高度"算水平的岩层：一层一层颜色交替，每层底下一道暗缝、顶上一道亮边，边界带一点噪声起伏。
+const ROCK = [0xc79a72, 0xdcb486, 0xb08a6e, 0xd1a47a, 0xa89486].map((h) => new THREE.Color(h));
 function terrainMaterial(toon, snowU) {
   const m = toon(0xffffff, { vertexColors: true });
   m.onBeforeCompile = (sh) => {
     sh.uniforms.uSnow = snowU;
-    sh.vertexShader = "attribute float snowable;\nvarying float vSnow;\n" + sh.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvSnow = snowable;");
-    sh.fragmentShader = "uniform float uSnow;\nvarying float vSnow;\n" + sh.fragmentShader.replace("#include <color_fragment>",
-      "#include <color_fragment>\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.94, 0.96, 1.0), uSnow * vSnow);");
+    sh.uniforms.uRock = { value: ROCK };
+    sh.vertexShader = "attribute float snowable;\nvarying float vSnow;\nvarying vec3 vWPos;\nvarying vec3 vWN;\n" + sh.vertexShader.replace("#include <begin_vertex>",
+      "#include <begin_vertex>\nvSnow = snowable;\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWN = normalize(mat3(modelMatrix) * objectNormal);");
+    sh.fragmentShader = `uniform float uSnow; uniform vec3 uRock[5];
+varying float vSnow; varying vec3 vWPos; varying vec3 vWN;
+float th(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float tn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(th(i), th(i + vec2(1.0, 0.0)), f.x), mix(th(i + vec2(0.0, 1.0)), th(i + vec2(1.0, 1.0)), f.x), f.y); }
+` + sh.fragmentShader.replace("#include <color_fragment>", `#include <color_fragment>
+{
+  float rockK = smoothstep(0.7, 0.56, normalize(vWN).y) * smoothstep(${(SEA_Y + 0.12).toFixed(2)}, ${(SEA_Y + 0.3).toFixed(2)}, vWPos.y);
+  if (rockK > 0.001) {
+    float b = (vWPos.y - ${SEA_Y.toFixed(2)}) / 0.27 + tn(vWPos.xz * 1.6) * 0.55 + tn(vWPos.xz * 5.0) * 0.12;
+    float band = floor(b), f = fract(b);
+    int bi = int(mod(band, 5.0));
+    vec3 rc = uRock[0];
+    if (bi == 1) rc = uRock[1]; else if (bi == 2) rc = uRock[2]; else if (bi == 3) rc = uRock[3]; else if (bi == 4) rc = uRock[4];
+    rc *= 0.93 + 0.12 * tn(vec2(vWPos.x * 4.0 + vWPos.z * 3.0, vWPos.y * 7.0));
+    rc *= mix(0.74, 1.0, smoothstep(0.0, 0.1, f));   // 每层底下的暗缝
+    rc = mix(rc, rc * 1.12, smoothstep(0.86, 0.95, f)); // 每层顶上的亮边
+    diffuseColor.rgb = mix(diffuseColor.rgb, rc, rockK);
+  }
+}
+diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.94, 0.96, 1.0), uSnow * vSnow);`);
   };
+  m.customProgramCacheKey = () => "terrain-strata";
   return m;
 }
 
+const SEASON = season();
 export function createWorld({ scene, world, toon, outlined, tag }) {
   const env = new THREE.Group();
   world.add(env);
@@ -168,31 +209,144 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   const isl = buildMainIsland({ material: terrainMaterial(toon, snowU) });
   const ground = isl.mesh;
   env.add(tag(ground, "ground"));
-  // 沙滩上的小石头和贝壳（顺着真实的海岸线摆，避开码头和河口）
+  // 沙滩：几小堆大小不一的圆石（不是一圈等距的碎石），几枚贝壳、海星，两根浮木。都顺着真实的海岸线摆，避开码头和河口。
   const shellCols = [0xffc4d0, 0xfff1e0, 0xffd9a8];
-  for (let i = 0; i < 26; i++) {
-    const a = i * 2.39 + 0.4;
-    const r = isl.shoreR(a) - 0.25 - hash1(i + 9) * 0.45;
-    const x = Math.cos(a) * r, z = Math.sin(a) * r, y = mainHeight(x, z);
-    if (angDist(a, DOCK_A) < 0.15 || isl.riverD(x, z) < 0.7 || y > SEA_Y + 0.3) continue;
-    const isShell = i % 3 === 0;
-    const m = isShell ? mk(new THREE.ConeGeometry(0.07, 0.06, 7), shellCols[i % 3], 0.015)
-      : mk(new THREE.DodecahedronGeometry(0.07 + hash1(i) * 0.09, 0), 0xb7ada4, 0.02);
-    m.position.set(x, y + 0.03, z);
-    m.rotation.set(hash1(i + 3) * 3, hash1(i + 4) * 3, 0);
+  const onBeach = (a, inset) => {
+    const r = isl.shoreR(a) - inset, x = Math.cos(a) * r, z = Math.sin(a) * r, y = mainHeight(x, z);
+    if (angDist(a, DOCK_A) < 0.2 || isl.riverD(x, z) < 0.8 || y > SEA_Y + 0.3) return null;
+    return { x, y, z };
+  };
+  const rockCols = [0xc2b6a8, 0xb3a596, 0xd0c5b8];
+  [0.9, 2.2, 3.3, 4.4, 5.6].forEach((a0, gi) => { // 5 小堆，每堆 2–3 块
+    for (let k = 0; k < 2 + (gi % 2); k++) {
+      const p = onBeach(a0 + k * 0.07, 0.35 + k * 0.12);
+      if (!p) continue;
+      const r = (k === 0 ? 0.17 : 0.09) + hash1(gi * 5 + k) * 0.06;
+      const m = mk(softRock(r, gi * 3 + k), rockCols[(gi + k) % 3], 0.02);
+      m.position.set(p.x, p.y + r * 0.35, p.z);
+      m.rotation.y = gi + k;
+      env.add(m);
+    }
+  });
+  [1.5, 2.8, 3.9, 5.1, 6.0].forEach((a, i) => { // 贝壳
+    const p = onBeach(a, 0.5);
+    if (!p) return;
+    const m = mk(new THREE.ConeGeometry(0.07, 0.06, 7), shellCols[i % 3], 0.015);
+    m.position.set(p.x, p.y + 0.03, p.z);
+    m.rotation.set(0.3, a * 3, 0.2);
     env.add(m);
+  });
+  const starShape = new THREE.Shape();
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2 + Math.PI / 2, rr = i % 2 ? 0.045 : 0.11;
+    if (i) starShape.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); else starShape.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
   }
-  // 海里几块大圆石（有的半露出水面），比堆在崖上的碎石自然
-  for (const [x, z, s] of [[-5.9, -2.2, 0.5], [-5.4, -3.6, 0.32], [4.9, -4.6, 0.45], [5.8, -3.2, 0.3], [-4.2, 3.9, 0.35]]) {
-    const m = mk(new THREE.DodecahedronGeometry(s, 1), 0xb9ab9d, 0.03);
-    m.scale.y = 0.7;
-    m.position.set(x, SEA_Y + s * 0.15, z);
+  const starGeo = new THREE.ExtrudeGeometry(starShape, { depth: 0.025, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 2 }).rotateX(-Math.PI / 2);
+  [[2.45, 0.45, 0xff9e7a], [4.7, 0.4, 0xffb36b], [0.35, 0.55, 0xff8fa3]].forEach(([a, inset, c]) => { // 海星
+    const p = onBeach(a, inset);
+    if (!p) return;
+    const m = mk(starGeo, c, 0.012);
+    m.position.set(p.x, p.y + 0.005, p.z);
+    m.rotation.y = a * 2;
+    env.add(m);
+  });
+  [[3.55, 0.55, 0.55], [5.35, 0.5, 0.42]].forEach(([a, inset, L], i) => { // 浮木
+    const p = onBeach(a, inset);
+    if (!p) return;
+    const log = mk(new THREE.CapsuleGeometry(0.055, L, 4, 8), 0xb9a48c, 0.015);
+    log.rotation.set(Math.PI / 2, 0, a + 1.2 + i);
+    log.position.set(p.x, p.y + 0.05, p.z);
+    const twig = mk(new THREE.CylinderGeometry(0.02, 0.025, 0.2, 5), 0xa8937a, 0.008);
+    twig.position.set(0.04, 0.1 - L * 0.3, 0); twig.rotation.z = -0.9;
+    log.add(twig);
+    env.add(log);
+  });
+  // 海里几块大圆石（有的半露出水面），两块顶上长了苔藓
+  for (const [x, z, s, moss] of [[-5.9, -2.2, 0.5, 1], [-5.4, -3.6, 0.32, 0], [4.9, -4.6, 0.45, 1], [5.8, -3.2, 0.3, 0], [-4.2, 3.9, 0.35, 0]]) {
+    const m = mk(softRock(s, x * 3, 0.72), 0xb5a797, 0.03);
+    m.position.set(x, SEA_Y + s * 0.12, z);
     m.rotation.y = x;
+    if (moss) {
+      const cap = mk(new THREE.SphereGeometry(s * 0.72, 14, 6, 0, Math.PI * 2, 0, Math.PI * 0.32), 0x7cb565, 0.015);
+      cap.position.y = s * 0.72 * 0.62 - s * 0.72 * 0.95 + s * 0.5;
+      cap.scale.y = 0.8;
+      m.add(cap);
+    }
     env.add(m);
   }
 
+  // 崖顶垂下来的一圈草帘 + 崖面上嵌着的几块突出的石头（沿草地、高台的轮廓找"往外一步就掉下去"的地方）
+  {
+    const fr = [], rocks = [];
+    const edgeScan = (poly, top) => {
+      const pts = [];
+      for (let i = 0; i < poly.length; i++) {
+        const [ax, az] = poly[i], [bx, bz] = poly[(i + 1) % poly.length], L = Math.hypot(bx - ax, bz - az);
+        for (let t = 0; t < L; t += 0.11) pts.push([ax + ((bx - ax) * t) / L, az + ((bz - az) * t) / L, (bz - az) / L, -(bx - ax) / L]);
+      }
+      for (const [x0, z0, nx0, nz0] of pts) {
+        // 往外的方向 = 更低的那一边
+        let nx = nx0, nz = nz0;
+        if (mainHeight(x0 + nx * 0.4, z0 + nz * 0.4) > mainHeight(x0 - nx * 0.4, z0 - nz * 0.4)) { nx = -nx; nz = -nz; }
+        let x = x0 - nx * 0.4, z = z0 - nz * 0.4, h0 = mainHeight(x, z);
+        if (Math.abs(h0 - top) > 0.06) continue;
+        let k = 0;
+        while (k < 30 && mainHeight(x + nx * 0.03, z + nz * 0.03) > top - 0.04) { x += nx * 0.03; z += nz * 0.03; k++; }
+        const below = mainHeight(x + nx * 0.25, z + nz * 0.25);
+        if (top - below < 0.3) continue; // 不是崖，是缓坡
+        if (isl.riverD(x, z) < 0.5 || Math.hypot(x - DOCK.base.x, z - DOCK.base.z) < 0.7) continue;
+        fr.push([x, top, z, nx, nz]);
+        // 崖面中段：嵌一块石头（隔一段放一块）
+        if (hash1(x * 13 + z * 7) > 0.84) {
+          let mx = x, mz = z;
+          for (let j = 0; j < 30 && mainHeight(mx, mz) > (top + Math.max(SEA_Y, below)) / 2; j++) { mx += nx * 0.025; mz += nz * 0.025; }
+          rocks.push([mx, mainHeight(mx, mz), mz, nx, nz]);
+        }
+      }
+    };
+    edgeScan(MAP.UPPER, mainHeight(-0.5, -5.0));
+    edgeScan(MAP.MEADOW, 0);
+    const blade = new THREE.ConeGeometry(0.05, 0.24, 4);
+    blade.rotateX(Math.PI); // 尖朝下
+    blade.translate(0, -0.12, 0); // 根在 y = 0，尖在 y = -0.24
+    const PER = 3, n = fr.length * PER;
+    const fringeMat = toon(0xffffff);
+    fringeMat.onBeforeCompile = (sh) => { // 下雪时跟着变白
+      sh.uniforms.uSnow = snowU;
+      sh.fragmentShader = "uniform float uSnow;\n" + sh.fragmentShader.replace("#include <color_fragment>",
+        "#include <color_fragment>\n diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.93, 0.96, 1.0), uSnow * 0.85);");
+    };
+    fringeMat.customProgramCacheKey = () => "fringe-snow";
+    const fringe = new THREE.InstancedMesh(blade, fringeMat, n);
+    const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
+    const cols = [0x5fa652, 0x6bb35a, 0x579a4c].map((c) => new THREE.Color(c));
+    let i = 0;
+    for (const [x, y, z, nx, nz] of fr) for (let k = 0; k < PER; k++) {
+      const j = hash1(i * 3.7), off = (k - 1) * 0.035;
+      ps.set(x + nx * 0.02 - nz * off, y + 0.03, z + nz * 0.02 + nx * off);
+      e.set(0, Math.atan2(nx, nz), 0, "YXZ");
+      e.x = -(0.25 + j * 0.35); // 往下垂、尖稍微往外翘
+      q.setFromEuler(e);
+      const L = 0.55 + j * 0.8;
+      sc.set(0.8 + j * 0.4, L, 0.8);
+      fringe.setMatrixAt(i, m4.compose(ps, q, sc));
+      fringe.setColorAt(i, cols[i % 3]);
+      i++;
+    }
+    fringe.raycast = () => {};
+    fringe.userData.dynamic = true;
+    env.add(fringe);
+    rocks.forEach(([x, y, z, nx, nz], i) => {
+      const r = 0.14 + hash1(i + 0.5) * 0.12;
+      const m = mk(softRock(r, i + 20, 0.6), [0xb59a80, 0xc8a882, 0xa89080][i % 3], 0.02);
+      m.position.set(x - nx * r * 0.3, y, z - nz * r * 0.3);
+      m.rotation.y = Math.atan2(nx, nz);
+      env.add(m);
+    });
+  }
+
   // 雾：远处的小岛有点空气感（颜色跟天色走）
-  scene.fog = new THREE.Fog(0xbfe8ff, 22, 42);
+  scene.fog = new THREE.Fog(0xc4e9ff, 24, 46);
 
   /* ------------------------------------------------------------ 海 */
   const SHORE_N = 512;
@@ -200,20 +354,25 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   for (let i = 0; i < SHORE_N; i++) shoreData[i] = isl.shoreR((i / SHORE_N) * Math.PI * 2 - Math.PI);
   const shoreTex = new THREE.DataTexture(shoreData, SHORE_N, 1, THREE.RedFormat, THREE.FloatType);
   shoreTex.needsUpdate = true;
+  // 太阳 / 月亮在天上的"画面位置"（低低地挂在天边），海面上的倒影光带、天空里的日月都用它
+  const SUN_DIR = new THREE.Vector3(-0.42, 0.26, -1).normalize();
   const seaU = {
     uT: { value: 0 }, uShore: { value: shoreTex },
     uShallow: { value: new THREE.Color(0x7ce6d8) }, uDeep: { value: new THREE.Color(0x3d9ee6) },
     uFoam: { value: new THREE.Color(0xffffff) }, uFar: { value: new THREE.Color(0xbfe8ff) },
+    uSunDir: { value: SUN_DIR }, uSpec: { value: new THREE.Color(0xfff6d8) }, uSpecK: { value: 0.6 }, uGlint: { value: 0.7 },
   };
+  // [浅水, 深水, 远处(=天边), 倒影颜色, 倒影强度, 闪点强度, 浪花]
   const SEA_COLS = {
-    dawn: [0x8fded2, 0x5a92d6, 0xffd9c2], day: [0x7ce6d8, 0x3d9ee6, 0xbfe8ff],
-    dusk: [0x86c4cc, 0x4f6fb0, 0xffc1a8], night: [0x2f7088, 0x1b3160, 0x34407a],
+    dawn: [0x8fded2, 0x5a92d6, 0xffd9c2, 0xffd2a8, 0.75, 0.5, 0xffffff], day: [0x7ce6d8, 0x3d9ee6, 0xc4e9ff, 0xfff6d8, 0.55, 0.65, 0xffffff],
+    dusk: [0x86c4cc, 0x4f6fb0, 0xffc1a8, 0xffb07a, 0.85, 0.35, 0xfff0e6], night: [0x245c78, 0x13244c, 0x26305e, 0xdfe6ff, 0.7, 0.1, 0x7f8cc0],
   };
-  const sea = new THREE.Mesh(new THREE.CircleGeometry(34, 96), new THREE.ShaderMaterial({
+  const sea = new THREE.Mesh(new THREE.CircleGeometry(48, 96), new THREE.ShaderMaterial({
     uniforms: seaU, transparent: true, depthWrite: false,
-    vertexShader: `varying vec2 vP; void main(){ vec4 w = modelMatrix * vec4(position,1.); vP = w.xz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+    vertexShader: `varying vec2 vP; varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.); vP = w.xz; vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
     fragmentShader: `
-      varying vec2 vP; uniform float uT; uniform sampler2D uShore; uniform vec3 uShallow, uDeep, uFoam, uFar;
+      varying vec2 vP; varying vec3 vW; uniform float uT; uniform sampler2D uShore; uniform vec3 uShallow, uDeep, uFoam, uFar;
+      uniform vec3 uSunDir, uSpec; uniform float uSpecK, uGlint;
       void main(){
         float r = length(vP), a = atan(vP.y, vP.x);
         float n = sin(vP.x*1.3 + uT*0.7)*0.5 + sin(vP.y*1.6 - uT*0.55)*0.5;
@@ -226,10 +385,16 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
         float ph = fract(uT*0.22);
         float ring = (1.0 - step(0.045, abs(d - 0.32 - ph*1.1))) * step(0.5, fract(a*6.0/6.2832 + uT*0.05 + n*0.1)) * (1.0 - ph);
         float glint = step(0.93, sin(vP.x*3.1 + uT*1.1 + n) * sin(vP.y*2.7 - uT*0.9)) * (1.0 - smoothstep(4., 14., d));
-        col = mix(col, uFoam, max(foam, max(ring*0.9, glint*0.7)));
-        col = mix(col, uFar, smoothstep(6.0, 20.0, r) * 0.65);
+        col = mix(col, uFoam, max(foam, max(ring*0.9, glint*uGlint)));
+        // 日 / 月的倒影：小浪的法线 + 反射，量化成一块块亮斑，连成一条朝着日月的光带
+        vec3 nw = normalize(vec3(cos(vP.x*2.3 + uT*1.2)*0.09 + cos(vP.y*3.1 - uT*0.8)*0.06, 1.0, cos(vP.y*2.1 + uT)*0.09 + cos((vP.x+vP.y)*2.7 - uT*1.3)*0.05));
+        vec3 R = reflect(normalize(vW - cameraPosition), nw);
+        float sp = pow(max(dot(R, uSunDir), 0.0), 40.0);
+        float streak = step(0.35, sp * (0.75 + 0.25 * sin(vP.x*9.0 + vP.y*7.0 + uT*2.0))) * step(0.0, d);
+        col = mix(col, uFar, smoothstep(8.0, 30.0, r) * 0.8);
+        col = mix(col, uSpec, streak * uSpecK);
         float a0 = max(foam, mix(0.42, 0.95, smoothstep(0.0, 3.0, d)));
-        gl_FragColor = vec4(col, (1.0 - smoothstep(16.0, 30.0, r)) * a0);
+        gl_FragColor = vec4(col, max(streak * uSpecK, (1.0 - smoothstep(30.0, 46.0, r)) * a0));
       }`,
   }));
   sea.rotation.x = -Math.PI / 2;
@@ -266,14 +431,21 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
     }
     return g;
   };
-  for (const [x, z, kind, s] of [[-2.45, -4.35, "r", 1.0], [-0.55, -5.35, "r", 1.1], [2.65, -4.85, "r", 0.85], [-3.0, -4.75, "p", 1.0],
+  for (const [x, z, kind, s] of [[-2.45, -4.35, "r", 1.0], [-0.3, -5.7, "r", 1.05], [2.65, -4.85, "r", 0.85], [-3.0, -4.75, "p", 1.0],
     [2.3, -5.55, "p", 1.1], [-1.1, -5.6, "p", 0.9], [-2.6, -5.4, "r", 0.8]]) {
-    const t = kind === "r" ? roundTree(0.48, 0x5cb86d, 0x6fcf86) : pine(1.3, 0x4fa86a);
+    const SEASON_TREE = { autumn: [[0xe9a03b, 0xf2c14e], [0xd9673a, 0xef8a4a]], spring: [[0xf7a8c4, 0xffc4d8]] }[SEASON];
+    const tint = kind === "r" && SEASON_TREE && (x * 7 + z * 3) % 2 < 1.1 ? SEASON_TREE[Math.abs(Math.round(x)) % SEASON_TREE.length] : null;
+    const t = kind === "r" ? roundTree(0.48, tint ? tint[0] : 0x5cb86d, tint ? tint[1] : 0x6fcf86) : pine(1.3, 0x4fa86a);
     t.position.set(x, mainHeight(x, z) - 0.03, z);
     t.scale.setScalar(s);
     t.rotation.y = x * 3;
     env.add(t);
   }
+
+  /* ------------------------------------------------------------ 高台上的小木屋 + 木梯 + 踏脚石（home3d.js） */
+  const home = buildHome({ toon, outlined, heightAt: mainHeight, tag });
+  env.add(home.root);
+  updaters.push((t, dt) => home.update(t, dt));
 
   /* ------------------------------------------------------------ 码头 */
   const dock = new THREE.Group();
@@ -297,7 +469,10 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   lBox.position.y = 0.58;
   const lLight = new THREE.PointLight(0xffc870, 0, 3, 1.6);
   lLight.position.y = 0.6;
-  lantern.add(lPole, lBox, lLight);
+  const lGlow = glowSprite(0xffc870, 1.1);
+  lGlow.position.y = 0.58;
+  lBox.userData.dynamic = true;
+  lantern.add(lPole, lBox, lLight, lGlow);
   lantern.position.set(0.3, 0, len - 0.1);
   dock.add(lantern);
   dock.position.copy(DOCK.base);
@@ -331,7 +506,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   const TUFTS = 320;
   const grass = new THREE.InstancedMesh(tuftGeo, grassMat, TUFTS);
   const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
-  const gc = [0x5fb85a, 0x6fc865, 0x83d470, 0x4fa54f].map((c) => new THREE.Color(c));
+  const gc = [0x5aa955, 0x68b85e, 0x7bc56a, 0x4c9a4c].map((c) => new THREE.Color(c));
   let n = 0, seed = 1;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
   while (n < TUFTS) {
@@ -341,6 +516,11 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
     const onUpper = h > 1.45 && isl.upperSD(x, z) < -0.25;
     if (!onMeadow && !onUpper) continue;
     if (isl.riverD(x, z) < 0.65 || Math.hypot(x - POOL.x, z - POOL.z) < 1.0) continue;
+    // 成片地长：噪声低的地方空着（草坪），高的地方一丛挨一丛；小路、踏脚石、小木屋周围不长
+    const clump = vnoise2(x * 0.9 + 3, z * 0.9 - 1) * 0.75 + vnoise2(x * 2.3, z * 2.3) * 0.25;
+    if (clump < 0.5 || (clump < 0.6 && rnd() < 0.6)) continue;
+    if (lineD(x, z, STONE_PATH) < 0.32 || PATH_LINES.some((pl) => lineD(x, z, pl) < 0.3)) continue;
+    if (Math.hypot(x - HOME.x, z - HOME.z) < 0.85) continue;
     const r = Math.hypot(x, z);
     if (Math.hypot(x - 0.35, z - 0.75) < 0.7) continue;         // 小伙伴的家
     if (Math.hypot(x + 1.55, z + 0.85) < 1.05) continue;        // 床
@@ -409,7 +589,10 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   hut.position.set(0.5, 0.17, 0.15);
   const hutRoof = mk(new THREE.ConeGeometry(0.38, 0.28, 4), 0x6f9fd8, 0.02);
   hutRoof.position.set(0.5, 0.48, 0.15); hutRoof.rotation.y = Math.PI / 4;
-  tower.add(lampHouse, roof, beamPivot, hut, hutRoof);
+  const lhGlow = glowSprite(0xfff1b8, 2.2);
+  lhGlow.position.y = 1.73;
+  lampHouse.userData.dynamic = true;
+  tower.add(lampHouse, roof, beamPivot, hut, hutRoof, lhGlow);
   tower.position.y = lh.userData.topY;
   lh.add(tower);
   for (const [dx, dz] of [[-0.8, 0.4], [-0.5, -0.8]]) { const tr = cone(0.28, 0.7, 0x4fae6a); tr.position.set(dx, lh.userData.topY + 0.35, dz); lh.add(tr); }
@@ -473,25 +656,68 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   perch.scale.setScalar(0.9);
   reef.add(perch);
 
-  /* ------------------------------------------------------------ 云 */
+  /* ------------------------------------------------------------ 天空：一个大球罩住整个场景（渐变 + 日月 + 夜里的星星）
+     天边的颜色 = 海的远处颜色 = 雾的颜色，海和天在天边接上，看不到"海的圆边"。 */
+  const skyU = {
+    uTop: { value: new THREE.Color() }, uMid: { value: new THREE.Color() }, uHor: { value: new THREE.Color() },
+    uSunDir: { value: SUN_DIR }, uDiskC: { value: new THREE.Color() }, uGlowC: { value: new THREE.Color() },
+    uDisk: { value: 0.9992 }, uMoon: { value: 0 }, uStars: { value: 0 }, uT: { value: 0 },
+  };
+  const SKY_COLS = { // 顶、中、（天边取 SEA_COLS 的远处色）、日月、光晕、日月大小
+    day: [0x5aaeef, 0x9dd4ff, 0xfff8dc, 0xfff1c0, 0.9994],
+    dawn: [0x8aa0dc, 0xf3b9ae, 0xffe6b8, 0xffc49a, 0.9991],
+    dusk: [0x5560b4, 0xf09888, 0xffc48a, 0xff9a6b, 0.999],
+    night: [0x0b1032, 0x1a2156, 0xfdf6d8, 0x8f9ad8, 0.9993],
+  };
+  const skyDome = new THREE.Mesh(new THREE.SphereGeometry(56, 40, 20), new THREE.ShaderMaterial({
+    uniforms: skyU, side: THREE.BackSide, depthWrite: false, fog: false,
+    vertexShader: "varying vec3 vW; void main(){ vec4 w = modelMatrix * vec4(position,1.); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }",
+    fragmentShader: `varying vec3 vW; uniform vec3 uTop, uMid, uHor, uSunDir, uDiskC, uGlowC; uniform float uDisk, uMoon, uStars, uT;
+      float h3(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+      void main(){
+        vec3 d = normalize(vW - cameraPosition);
+        float h = d.y;
+        vec3 c = mix(uHor, uMid, smoothstep(-0.01, 0.16, h));
+        c = mix(c, uTop, smoothstep(0.16, 0.62, h));
+        float sd = dot(d, uSunDir);
+        c += uGlowC * pow(max(sd, 0.0), 10.0) * 0.45 + uGlowC * pow(max(sd, 0.0), 80.0) * 0.35;
+        float disk = smoothstep(uDisk - 0.00025, uDisk, sd);
+        // 月牙：再挖掉一个错开一点的圆
+        float bite = smoothstep(uDisk - 0.00025, uDisk, dot(d, normalize(uSunDir + vec3(0.016, 0.012, 0.0)))) * uMoon;
+        c = mix(c, uDiskC, disk * (1.0 - bite));
+        // 星星：方向空间里分格子，少数格子里有一颗，一闪一闪；越靠近天边越淡
+        if (uStars > 0.01) {
+          vec3 g = d * 90.0, cell = floor(g);
+          float r = h3(cell);
+          if (r > 0.985) {
+            vec3 ctr = cell + 0.5 + (vec3(h3(cell + 1.3), h3(cell + 2.7), h3(cell + 4.1)) - 0.5) * 0.6;
+            float st = smoothstep(0.22, 0.0, length(g - ctr)) * (0.6 + 0.4 * sin(uT * (1.5 + r * 20.0) + r * 50.0));
+            c += vec3(1.0, 0.97, 0.88) * st * uStars * smoothstep(0.04, 0.25, h) * (1.0 - disk);
+          }
+        }
+        gl_FragColor = vec4(c, 1.0); // 和海、雾一样不做色彩空间转换，天边才接得上
+      }`,
+  }));
+  skyDome.renderOrder = -10;
+  skyDome.frustumCulled = false;
+  skyDome.raycast = () => {};
+  skyDome.userData.dynamic = true;
+  env.add(skyDome);
+  updaters.push((t) => { skyU.uT.value = t; });
+
+  /* ------------------------------------------------------------ 云：蓬松的一整团（和天气里的云同一个生成器），远远地绕着岛飘 */
   const clouds = new THREE.Group();
   const cloudMat = toon(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.25 });
-  for (let i = 0; i < 6; i++) {
-    const c = new THREE.Group();
-    const puffs = 4 + (i % 3);
-    for (let k = 0; k < puffs; k++) {
-      const r = 0.45 + hash1(i * 7 + k) * 0.4;
-      const m = new THREE.Mesh(new THREE.SphereGeometry(r, 14, 10), cloudMat);
-      m.position.set((k - puffs / 2) * 0.55, Math.sin(k * 1.7) * 0.15 + (k % 2 ? 0.2 : 0), hash1(k + i) * 0.3);
-      m.scale.y = 0.75;
-      c.add(m);
-    }
-    const a = (i / 6) * Math.PI * 2 + 0.4, R = 13 + (i % 3) * 3;
-    c.position.set(Math.cos(a) * R, 3.6 + (i % 3) * 0.9, Math.sin(a) * R);
+  for (let i = 0; i < 7; i++) {
+    const c = new THREE.Mesh(cloudGeometry(i + 3, 1), cloudMat);
+    c.raycast = () => {};
+    const a = (i / 7) * Math.PI * 2 + 0.4, R = 17 + (i % 3) * 4;
+    c.position.set(Math.cos(a) * R, 3.2 + (i % 3) * 1.1, Math.sin(a) * R);
     c.lookAt(0, c.position.y, 0);
-    c.scale.setScalar(0.9 + (i % 2) * 0.5);
+    c.scale.setScalar(1.3 + (i % 2) * 0.7);
     clouds.add(c);
   }
+  clouds.userData.dynamic = true;
   env.add(clouds);
   updaters.push((t, dt) => { clouds.rotation.y += dt * 0.012; });
 
@@ -554,12 +780,20 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   let sky = "day";
   function setSky(k) {
     sky = k;
-    const [s, d, f] = SEA_COLS[k] || SEA_COLS.day;
+    const [s, d, f, spc, spk, gl, fo] = SEA_COLS[k] || SEA_COLS.day;
     seaU.uShallow.value.setHex(s); seaU.uDeep.value.setHex(d); seaU.uFar.value.setHex(f);
+    seaU.uSpec.value.setHex(spc); seaU.uSpecK.value = spk; seaU.uGlint.value = gl; seaU.uFoam.value.setHex(fo);
+    water.setNight(k === "night" ? 1 : k === "dusk" ? 0.35 : k === "dawn" ? 0.15 : 0);
     scene.fog.color.setHex(f);
+    const [top, mid, dc, gc, dk] = SKY_COLS[k] || SKY_COLS.day;
+    skyU.uTop.value.setHex(top); skyU.uMid.value.setHex(mid); skyU.uHor.value.setHex(f);
+    skyU.uDiskC.value.setHex(dc); skyU.uGlowC.value.setHex(gc); skyU.uDisk.value = dk;
+    skyU.uMoon.value = k === "night" ? 1 : 0;
+    skyU.uStars.value = k === "night" ? 1 : k === "dusk" ? 0.25 : 0;
     cloudMat.color.setHex(k === "night" ? 0x8c94c8 : k === "dusk" ? 0xffd6c8 : 0xffffff);
     cloudMat.emissive.setHex(k === "night" ? 0x2a3060 : 0xffffff);
     cloudMat.emissiveIntensity = k === "night" ? 0.3 : 0.22;
+    home.setNight(k === "night" ? 1 : k === "dusk" ? 0.7 : k === "dawn" ? 0.35 : 0);
   }
   function update(t, dt) {
     for (const u of updaters) u(t, dt);
@@ -570,6 +804,9 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
     lLight.intensity = night ? 2.2 : sky === "dusk" ? 1 : 0;
     lBox.material.color.setHex(night || sky === "dusk" ? 0xffd27a : 0xf3eee0);
     lampHouse.material.color.setHex(night ? 0xfff1b8 : 0xf6f1e4);
+    const glowK = night ? 1 : sky === "dusk" ? 0.55 : 0;
+    lGlow.material.opacity = glowK * (0.8 + Math.sin(t * 2.3) * 0.08);
+    lhGlow.material.opacity = glowK * 0.9;
     // 海鸥
     gulls.forEach((g) => {
       g.visible = day;
@@ -649,7 +886,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
 
   // 对面那座岛 = 对方的城市（extras3d 往上面加天气、灯、标牌）
   const farInfo = { group: far, center: new THREE.Vector3(4, 0, -15.5), topY: far.userData.topY, mesh: far.children[0], radius: 3.4 };
-  return { top, ground, sea, dock, env, update, setSky, splash, SEA_Y, heightAt: mainHeight, far: farInfo };
+  return { top, ground, sea, dock, env, update, setSky, splash, SEA_Y, heightAt: mainHeight, far: farInfo, home };
 }
 
 function makeGull(mk) {

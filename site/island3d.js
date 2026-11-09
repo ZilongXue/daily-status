@@ -5,6 +5,7 @@
 //   - 高台前沿有一道大瀑布，落进水潭，再变成一条弯弯的小河流进海里，河上有一座小木桥。
 //   - 颜色按坡度：平的是草（有深浅色块和小土路），陡的是一层层岩石（顶点带一点起伏），低处是沙子和湿沙。
 import * as THREE from "three";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
 
 export const SEA_Y = -0.85;
 const UPPER_H = 1.5;
@@ -25,8 +26,24 @@ const CREEK = [[-1.6, -4.45], [-1.42, -4.05], [-1.25, -3.68]];
 export const FALL_TOP = { x: -1.25, z: -3.54 };
 export const BRIDGE = { x: -3.1, z: -1.75 };
 export const FARM = { x: 0.95, z: -4.75 }; // 高台上的菜地中心（高度 = 高台顶）
+// 圆润的石头：球体按噪声轻轻鼓包、压扁一点（和树、云一个"软"风格，不要棱角分明的多面体）
+export function softRock(r, seed = 1, squash = 0.75) {
+  const g = new THREE.SphereGeometry(1, 12, 9);
+  const p = g.attributes.position, v = new THREE.Vector3();
+  for (let i = 0; i < p.count; i++) {
+    v.fromBufferAttribute(p, i);
+    const k = 1 + 0.16 * (vnoise(v.x * 1.7 + seed * 3.1, v.z * 1.7 + v.y * 1.3 - seed) - 0.5) * 2;
+    p.setXYZ(i, v.x * k * r, v.y * k * r * squash, v.z * k * r);
+  }
+  const m = mergeVertices(g);
+  m.computeVertexNormals();
+  return m;
+}
 // 土路：家 → 码头，家 → 床，家 → 小桥
 const PATHS = [[[0.35, 0.75], [0.5, 1.6], [0.6, 2.45], [0.75, 3.4]], [[0.35, 0.75], [-0.4, 0.15], [-1.1, -0.35], [-2.0, -0.95], [-2.65, -1.35]], [[0.35, 0.75], [1.2, 0.2], [2.0, -0.2]]];
+// 面板里的俯视小地图（藏宝）和草丛避让用
+export const MAP = { COAST, MEADOW, UPPER, RIVER };
+export const PATH_LINES = PATHS;
 
 /* ---------------------------------------------------------------- 小工具 */
 const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
@@ -128,7 +145,7 @@ export const heightAt = (x, z) => carve(x, z, landH(x, z));
 /* ---------------------------------------------------------------- 网格 */
 const C = (h) => new THREE.Color(h);
 const PAL = {
-  grass: [C(0x9ad978), C(0x8fd06e), C(0xa9e284), C(0x86c765)], grassTop: C(0xb4e48c), grassEdge: C(0x6cb95a),
+  grass: [C(0x93cf6f), C(0x86c464), C(0xa0d87b), C(0x7cbc5e)], grassTop: C(0xaedc86), grassEdge: C(0x65ad57),
   path: C(0xead2a0), rock: [C(0xc79a72), C(0xdcb486), C(0xb08a6e), C(0xd1a47a), C(0xa89486)],
   sand: C(0xf6e0ab), wet: C(0xdcc38c), shallow: C(0xbfcf9e), deep: C(0x76aea6),
 };
@@ -221,19 +238,26 @@ export function buildMainIsland({ material }) {
 /* ---------------------------------------------------------------- 水：瀑布、水潭、小河、小溪 */
 export function buildWater({ toon, outlined }) {
   const g = new THREE.Group();
-  const U = { uT: { value: 0 } };
-  const flow = (speed, alpha = 0.92, foamEdge = 0.14) => new THREE.ShaderMaterial({
+  // uNight：0 白天 .. 1 深夜（水是不受光照的自发光材质，夜里要自己压暗）
+  const U = { uT: { value: 0 }, uNight: { value: 0 } };
+  const NIGHT_TINT = "vec3 nightTint(vec3 c){ return c * mix(vec3(1.0), vec3(0.38, 0.46, 0.74), uNight); }";
+  // 流水：松石绿的底 + 一条条错开的短白线顺着水流走（卡通水纹），两岸一圈白边
+  const flow = (speed, alpha = 0.92, foamEdge = 0.14, yScale = 1.6) => new THREE.ShaderMaterial({
     uniforms: U, transparent: true, depthWrite: false, side: THREE.DoubleSide,
     vertexShader: "varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
-    fragmentShader: `varying vec2 vUv; uniform float uT;
+    fragmentShader: `varying vec2 vUv; uniform float uT; uniform float uNight; ${NIGHT_TINT}
       void main(){
-        float s = fract(vUv.y * 2.2 - uT * ${speed.toFixed(2)} + sin(vUv.x * 9.0 + vUv.y * 3.0) * 0.12);
-        float s2 = fract(vUv.y * 5.3 - uT * ${(speed * 1.6).toFixed(2)} + vUv.x * 0.7);
-        vec3 c = mix(vec3(0.40, 0.78, 0.92), vec3(0.58, 0.88, 0.97), smoothstep(0.35, 0.65, s) * 0.8);
-        c = mix(c, vec3(0.95, 0.99, 1.0), smoothstep(0.8, 0.95, s2) * 0.75);
+        float y = vUv.y * ${yScale.toFixed(2)};
+        float lane = floor(vUv.x * 5.0), h = fract(sin(lane * 91.7 + 3.1) * 4375.85);
+        float s = fract(y * (0.8 + h * 0.6) - uT * ${speed.toFixed(2)} * (0.8 + h * 0.5) + h * 7.0);
+        float dash = smoothstep(0.0, 0.06, s) * (1.0 - smoothstep(0.16, 0.26, s));
+        dash *= 1.0 - smoothstep(0.1, 0.32, abs(fract(vUv.x * 5.0) - 0.5));
+        float wave = 0.5 + 0.5 * sin(y * 2.3 - uT * ${(speed * 2.2).toFixed(2)} + vUv.x * 5.0);
+        vec3 c = mix(vec3(0.22, 0.6, 0.72), vec3(0.34, 0.74, 0.84), step(0.5, wave) * 0.7 + 0.15);
+        c = mix(c, vec3(0.93, 0.99, 1.0), dash * 0.85);
         float e = min(vUv.x, 1.0 - vUv.x);
-        c = mix(vec3(1.0), c, smoothstep(0.0, ${foamEdge.toFixed(2)}, e));
-        gl_FragColor = vec4(c, ${alpha.toFixed(2)});
+        c = mix(vec3(0.97, 1.0, 1.0), c, smoothstep(0.0, ${foamEdge.toFixed(2)}, e));
+        gl_FragColor = vec4(nightTint(c), ${alpha.toFixed(2)});
       }`,
   });
   // 沿折线铺一条水面带子：y 用（没挖河道的）地形高度往下一点
@@ -268,14 +292,14 @@ export function buildWater({ toon, outlined }) {
   const pool = new THREE.Mesh(new THREE.CircleGeometry(POOL.r + 0.06, 36), new THREE.ShaderMaterial({
     uniforms: U, transparent: true, depthWrite: false,
     vertexShader: "varying vec2 vP; void main(){ vP = position.xy; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
-    fragmentShader: `varying vec2 vP; uniform float uT;
+    fragmentShader: `varying vec2 vP; uniform float uT; uniform float uNight; ${NIGHT_TINT}
       void main(){
         float r = length(vP);
-        vec3 c = mix(vec3(0.45, 0.82, 0.93), vec3(0.32, 0.68, 0.86), smoothstep(0.0, 0.6, r));
+        vec3 c = mix(vec3(0.24, 0.6, 0.72), vec3(0.32, 0.7, 0.8), smoothstep(0.0, 0.6, r));
         float ring = step(0.82, fract(r * 3.0 - uT * 0.6)) * (1.0 - smoothstep(0.2, 0.68, r));
         c = mix(c, vec3(0.9, 0.97, 1.0), ring * 0.7 + (1.0 - smoothstep(0.52, 0.68, r)) * 0.0);
         c = mix(c, vec3(1.0), smoothstep(0.58, 0.68, r) * 0.9);
-        gl_FragColor = vec4(c, 0.93);
+        gl_FragColor = vec4(nightTint(c), 0.93);
       }`,
   }));
   pool.rotation.x = -Math.PI / 2;
@@ -293,7 +317,7 @@ export function buildWater({ toon, outlined }) {
   for (let i = 0; i < 9; i++) {
     const a = (i / 9) * Math.PI * 2 + 0.3;
     if (Math.abs(((a - Math.atan2(CREEK[1][1] - SPRING.z, CREEK[1][0] - SPRING.x) + Math.PI * 3) % (Math.PI * 2)) - Math.PI) < 0.45) continue; // 出水口空着
-    const r = outlined(new THREE.Mesh(new THREE.DodecahedronGeometry(0.09 + (i % 3) * 0.035, 0), toon(i % 2 ? 0xc4bab0 : 0xb1a69b)), 0.018);
+    const r = outlined(new THREE.Mesh(softRock(0.09 + (i % 3) * 0.035, i, 1), toon(i % 2 ? 0xc4bab0 : 0xb1a69b)), 0.018);
     r.position.set(SPRING.x + Math.cos(a) * (SPRING.r + 0.08), sy - 0.03, SPRING.z + Math.sin(a) * (SPRING.r + 0.08));
     r.rotation.set(i, i * 2, 0);
     r.scale.y = 0.75;
@@ -310,7 +334,7 @@ export function buildWater({ toon, outlined }) {
       for (const side of [-1, 1]) {
         if (rnd() < 0.35) continue;
         const off = w + 0.06 + rnd() * 0.12, bx = x - (tz / L) * off * side, bz = z + (tx / L) * off * side;
-        const r = outlined(new THREE.Mesh(new THREE.DodecahedronGeometry(0.045 + rnd() * 0.06, 0), toon(pebbleCols[Math.floor(rnd() * 4)])), 0.012);
+        const r = outlined(new THREE.Mesh(softRock(0.045 + rnd() * 0.06, i + side, 1), toon(pebbleCols[Math.floor(rnd() * 4)])), 0.012);
         r.position.set(bx, yOf(bx, bz) - 0.01, bz);
         r.scale.y = 0.6; r.rotation.set(rnd() * 3, rnd() * 3, 0);
         g.add(r);
@@ -372,7 +396,7 @@ export function buildWater({ toon, outlined }) {
       p.setY(i, UPPER_H - 0.06 - k * FH);
       p.setX(i, x * (1 + 0.3 * k));
     } }
-  const fallMat = flow(1.6, 0.94, 0.16);
+  const fallMat = flow(1.6, 0.94, 0.16, 4.0);
   fallMat.fragmentShader = fallMat.fragmentShader.replace("gl_FragColor", "c = mix(c, vec3(1.0), smoothstep(0.9, 0.97, vUv.y) + smoothstep(0.12, 0.0, vUv.y) * 0.9);\n        gl_FragColor");
   const fall = new THREE.Mesh(fallGeo, fallMat);
   // 朝向：沿河潭方向（从瀑布口指向水潭）
@@ -429,6 +453,13 @@ export function buildWater({ toon, outlined }) {
   bridge.rotation.y = Math.atan2(bx - ax, bz - az) + Math.PI / 2;
   g.add(bridge);
 
+  const foamCol = new THREE.Color();
+  function setNight(k) {
+    U.uNight.value = k;
+    foamCol.setRGB(1, 1, 1).lerp(new THREE.Color(0x8e9ccc), k);
+    for (const b of foam) b.material.color.copy(foamCol);
+    for (const s of mist) s.material.color.copy(foamCol);
+  }
   function update(t) {
     U.uT.value = t;
     foam.forEach((b, i) => {
@@ -444,5 +475,5 @@ export function buildWater({ toon, outlined }) {
       s.material.opacity = Math.sin(p * Math.PI) * 0.55;
     });
   }
-  return { group: g, update, bridge };
+  return { group: g, update, bridge, setNight };
 }

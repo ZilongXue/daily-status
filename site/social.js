@@ -374,11 +374,21 @@
     }
   }
 
-  async function poll(first) {
+  // 同一时间只跑一个拉取：发完动作自己拉一次 + 实时推送也触发一次，两个请求带着同一个 since，
+  // 以前会把同一条动态追加两遍（日记里出现两条、对方那边动画也播两遍）。跑的过程中又有人要拉，就跑完再补一次。
+  let polling = null, pollAgain = false;
+  function poll(first) {
+    if (polling) { pollAgain = true; return polling; }
+    polling = (async () => {
+      do { pollAgain = false; await poll0(first); first = false; } while (pollAgain);
+    })().finally(() => { polling = null; });
+    return polling;
+  }
+  async function poll0(first) {
     if (fishingNow && !first) return; // 自己钓鱼时先别拉新动态，免得结果在揭晓前就剧透
     try {
       const r = await api("GET", null, "?since=" + lastId + "&who=" + (me || ""));
-      const fresh = r.events || [];
+      const fresh = (r.events || []).filter((e) => e.id > lastId); // 再保险一次：按 id 去重
       if (first) firstMore = !!r.more;
       if (r.presence) presence = r.presence;
       if (!fresh.length) { render(); if (first) renderTimeline(); return; }
@@ -1115,14 +1125,18 @@
       if (h && h.status !== "cancel" && (h.status === "found" || h.status === "lost")) {
         const seeker = otherOf(h.hider);
         s += `<p class="gres">${h.status === "found" ? `💰 ${whoName(seeker)}用了 ${h.digs.length} 铲挖到了${whoName(h.hider)}藏的宝藏` : `🗺 ${whoName(seeker)}挖了 ${h.max} 铲也没找到，宝藏归${whoName(h.hider)}`}</p>`;
+        const miss = h.status === "lost" ? nearestMiss(h) : null;
+        if (miss) s += `<p class="sub">宝藏在地图上的 <b style="color:#ff2f6d">✕</b> 那里（小岛上有一根金色光柱）。离得最近的是第 ${miss.n} 铲，只差大约 ${miss.steps} 步。</p>`;
+        s += huntMap(h);
+        if (h.x != null && window.NEST3D && window.NEST3D.huntLook) s += `<div class="row"><button class="mini-btn" data-hunt="look">📍 在小岛上看看藏在哪</button></div>`;
       }
       s += `<p class="sub">一个人把宝箱埋在小岛草地上，另一个人来挖：每一铲都会告诉你离宝藏有多近（🔥 超烫 / ♨️ 有点暖 / 🌬 有点凉 / ❄️ 好冷），挖到第 3、6 铲还有提示。一共 ${8} 铲。<br>挖到了：挖宝的人赢一张愿望券；8 铲都没挖到：藏宝的人赢。两种结果小岛都有星星。</p>
         <div class="row"><button class="bigbtn" data-hunt="hide">🗺 藏一个宝藏给${otherName()}</button></div>`;
     } else if (h.hider === me) {
-      s += `<p class="gres">宝藏藏好啦，等${otherName()}来挖 👀（已经挖了 ${h.digs.length}/${h.max} 铲）</p>${digList(h)}`;
+      s += `<p class="gres">宝藏藏好啦，等${otherName()}来挖 👀（已经挖了 ${h.digs.length}/${h.max} 铲）</p>${digList(h)}${huntMap(h)}`;
       s += h.digs.length ? `` : `<div class="row"><button class="mini-btn" data-hunt="cancel">不藏了</button></div>`;
     } else {
-      s += `<p class="gres">${otherName()}在小岛上藏了一个宝藏！还剩 <b>${h.max - h.digs.length}</b> 铲</p>${digList(h)}
+      s += `<p class="gres">${otherName()}在小岛上藏了一个宝藏！还剩 <b>${h.max - h.digs.length}</b> 铲</p>${digList(h)}${h.digs.length ? huntMap(h) : ""}
         <div class="row"><button class="bigbtn" data-hunt="seek">⛏ ${huntMode === "seek" ? "正在挖宝…" : "开始挖宝"}</button></div>`;
     }
     const hist = (games.huntHist || []).slice(-5).reverse();
@@ -1131,7 +1145,40 @@
   }
   function digList(h) {
     if (!h.digs.length && !h.hints.length) return "";
-    return `<div class="digs">${h.digs.map((d, i) => `<span class="dig b-${d.band}">${i + 1}. ${BAND[d.band][0]} ${BAND[d.band][1]}</span>`).join("")}</div>${h.hints.map((t) => `<p class="hint">💡 ${esc(t)}</p>`).join("")}`;
+    return `<div class="digs">${h.digs.map((d, i) => `<span class="dig b-${d.band}">${i + 1}. ${BAND[d.band][0]} ${BAND[d.band][1]}</span>`).join("")}</div>${h.hints.map((t) => `<p class="ghint">💡 ${esc(t)}</p>`).join("")}`;
+  }
+  // 俯视小地图：岛的轮廓 + 地标 + 挖过的坑（按冷热上色、标序号）+ 宝藏位置（藏的人一直看得到；结束后大家都看得到）
+  // 下面 = 小岛正面（码头那边），和默认镜头一致
+  const MAP_MARKS = [["🌳", 1.95, -1.25], ["🛏", -1.55, -0.85], ["🏡", -0.7, -4.45], ["🌊", -1.25, -3.2], ["🪵", 0.62, 3.3], ["🎰", 2.95, 1.75]];
+  const BAND_COL = { hot: "#ef5a3c", warm: "#f2a531", cool: "#5aa0e6", cold: "#5468c4", found: "#e0b000" };
+  function huntMap(h) {
+    const M = window.NEST3D && window.NEST3D.mapInfo;
+    if (!M || !h) return "";
+    const pts = (a) => a.map(([x, z]) => `${x.toFixed(2)},${z.toFixed(2)}`).join(" ");
+    const showX = h.x != null;
+    let s = `<svg class="hmap" viewBox="-6 -7.1 12 13" role="img" aria-label="小岛地图">`;
+    s += `<polygon points="${pts(M.COAST)}" fill="#f6e0ab" stroke="#e4c88a" stroke-width=".08"/>`;
+    s += `<polygon points="${pts(M.MEADOW)}" fill="#a6dc84"/><polygon points="${pts(M.UPPER)}" fill="#7fc46a" stroke="#b08a6e" stroke-width=".12"/>`;
+    s += `<polyline points="${pts(M.RIVER)}" fill="none" stroke="#7cc8f0" stroke-width=".32" stroke-linecap="round"/>`;
+    for (const [e, x, z] of MAP_MARKS) s += `<text x="${x}" y="${z}" font-size=".72" text-anchor="middle" dominant-baseline="central" opacity=".85">${e}</text>`;
+    h.digs.forEach((d, i) => {
+      s += `<circle cx="${d.x}" cy="${d.z}" r=".3" fill="${BAND_COL[d.band] || "#999"}" stroke="#fff" stroke-width=".07"/>`;
+      s += `<text x="${d.x}" y="${d.z + 0.02}" font-size=".34" font-weight="800" fill="#fff" text-anchor="middle" dominant-baseline="central">${i + 1}</text>`;
+    });
+    if (showX) {
+      s += `<circle cx="${h.x}" cy="${h.z}" r=".55" fill="none" stroke="#ff4f8b" stroke-width=".1" stroke-dasharray=".18 .12"><animate attributeName="r" values=".45;.7;.45" dur="1.6s" repeatCount="indefinite"/></circle>`;
+      s += `<path d="M${h.x - 0.28} ${h.z - 0.28}L${h.x + 0.28} ${h.z + 0.28}M${h.x + 0.28} ${h.z - 0.28}L${h.x - 0.28} ${h.z + 0.28}" stroke="#ff2f6d" stroke-width=".16" stroke-linecap="round"/>`;
+    }
+    s += `<text x="0" y="5.75" font-size=".46" fill="#8a7a6a" text-anchor="middle">⬇ 正面（码头这边）</text></svg>`;
+    let legend = `<div class="hmap-legend"><span style="--c:${BAND_COL.hot}">超烫</span><span style="--c:${BAND_COL.warm}">有点暖</span><span style="--c:${BAND_COL.cool}">有点凉</span><span style="--c:${BAND_COL.cold}">好冷</span>${showX ? `<span class="x">✕ 宝藏</span>` : ""}</div>`;
+    return `<div class="hmap-wrap">${s}${legend}</div>`;
+  }
+  // 没挖到时：最近的一铲差多少（和提示里的"步"一样，1 步 = 0.5）
+  function nearestMiss(h) {
+    if (h.x == null || !h.digs.length) return null;
+    let best = Infinity, idx = 0;
+    h.digs.forEach((d, i) => { const r = Math.hypot(d.x - h.x, d.z - h.z); if (r < best) { best = r; idx = i; } });
+    return { steps: Math.max(1, Math.round(best / 0.5)), n: idx + 1 };
   }
   function renderHuntBar() {
     const bar = $("#game-bar");
@@ -1340,6 +1387,7 @@
       else if (k === "seek") startHunt("seek");
       else if (k === "stop") { stopHunt(); if (panel === "games") renderGames(); }
       else if (k === "confirm") confirmHide();
+      else if (k === "look") { const h = games && games.hunt; if (h && h.x != null) { document.getElementById("scene").scrollIntoView({ behavior: "smooth", block: "center" }); window.NEST3D.huntLook(h.x, h.z); } }
       else if (k === "cancel") { try { await gamesApi({ game: "hunt", op: "cancel" }); await loadGames(); } catch (e) { say(e.message); } }
       return;
     }
@@ -1420,6 +1468,7 @@
     addEventListener("nest:3dready", applyWallet);
     if (window.NEST3D && window.NEST3D.extrasReady) window.NEST3D.extrasReady.then(() => { applyWallet(); syncWorld(); });
     if (window.NEST3D && window.NEST3D.playReady) window.NEST3D.playReady.then(() => syncGames3d());
+    addEventListener("nest:playready", () => syncGames3d());
     loadGames();
     loadWorld();
     setInterval(() => { if (!document.hidden) loadWorld(); }, 15 * 60000);

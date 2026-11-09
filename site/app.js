@@ -286,6 +286,8 @@ addEventListener("nest:tap", (ev) => {
     }
   } else if (what === "bed") {
     text = s.hours != null ? `小床：昨晚 ${clockOf(s.start)} 睡、${clockOf(s.end)} 醒，睡了 ${s.hours} 小时，睡眠表现 ${s.performance ?? "—"}%` : "小床：还没有睡眠记录";
+  } else if (what === "house") {
+    text = "我们的小木屋 🏡 晚上窗户会亮灯，烟囱一直冒着烟～";
   } else if (what === "tree") {
     text = `规律树：这周作息规律度 ${w.sleep_regularity ?? "—"}/100${st.regular_sleep ? `，已经连续规律 ${st.regular_sleep} 天` : "，树会越长越好的"} 🌳`;
   }

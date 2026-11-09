@@ -345,7 +345,12 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 .dig { font-size: 12.5px; font-weight: 700; padding: 4px 8px; border-radius: 999px; background: #eef4ff; }
 .dig.b-hot { background: #ffe1d9; color: #d4452b; } .dig.b-warm { background: #fff0d6; color: #c47a0a; }
 .dig.b-cool { background: #e5f2ff; color: #3a7ac0; } .dig.b-cold { background: #e3e9fb; color: #3c55a8; } .dig.b-found { background: #fff3c4; color: #a87b00; }
-.hint { font-size: 13.5px; margin: 4px 0; color: #8a5a2b; }
+.ghint { font-size: 13.5px; margin: 4px 0; color: #8a5a2b; }
+.hmap-wrap { margin: 8px 0; display: flex; flex-direction: column; align-items: center; }
+.hmap { width: min(260px, 80vw); height: auto; background: #bfe9f2; border-radius: 18px; }
+.hmap-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.hmap-legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c); margin-right: 3px; vertical-align: -1px; }
+.hmap-legend span.x { color: #ff2f6d; font-weight: 700; } .hmap-legend span.x::before { display: none; }
 .game-bar { position: fixed; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 40; width: min(560px, calc(100vw - 24px)); box-sizing: border-box;
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; border-radius: 16px; background: rgba(255, 252, 248, .97); box-shadow: 0 6px 24px rgba(90, 60, 40, .22); font-size: 14px; }
 .game-bar span { flex: 1 1 180px; line-height: 1.45; }

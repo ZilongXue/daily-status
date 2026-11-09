@@ -1,7 +1,7 @@
 // 小游戏在 3D 场景里的部分：藏宝（挖坑、小旗、宝箱）、钓鱼大赛的计分牌、奖杯、默契罐。
 // 模型在 games3d.js；这里负责摆放、走过去挖、和服务器状态同步。
 import * as THREE from "three";
-import { buildChest, buildDigMound, buildShovel, buildTrophy, buildScoreboard, buildHeartJar, buildHideMarker } from "./games3d.js?v=13";
+import { buildChest, buildDigMound, buildShovel, buildTrophy, buildScoreboard, buildHeartJar, buildHideMarker } from "./games3d.js?v=14";
 
 const FISH_NAME = { crucian: ["鲫鱼", "🐟"], clown: ["小丑鱼", "🐠"], puffer: ["河豚", "🐡"], shrimp: ["小虾", "🦐"], koi: ["锦鲤", "🎏"], jelly: ["水母", "🪼"], octopus: ["章鱼", "🐙"], turtle: ["海龟", "🐢"] };
 const BAND_TEXT = { hot: "🔥 超烫！", warm: "♨️ 有点暖", cool: "🌬 有点凉", cold: "❄️ 好冷…", found: "💰 挖到啦！" };
@@ -29,6 +29,47 @@ export function createPlay(ctx) {
   marker.root.scale.setScalar(1.7);
   marker.root.traverse((o) => { if (o.material) { o.material.depthTest = false; o.renderOrder = 6; } }); // 透过草也看得见（只有藏宝的人看得到）
   huntGroup.add(marker.root);
+  // 结束后"宝藏原来在这"：一根从天上照下来的金色光柱 + 地上一圈大的 X + 一直挂着的牌子。
+  // 透过草和树也看得见（不做深度测试），转到哪个角度都一眼能找到。
+  const spot = new THREE.Group();
+  spot.visible = false;
+  spot.userData.dynamic = true;
+  spot.name = "huntSpot";
+  {
+    const beamGeo = new THREE.CylinderGeometry(0.2, 0.34, 3.2, 20, 1, true).translate(0, 1.6, 0);
+    const beamMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+      uniforms: { uT: { value: 0 }, uC: { value: new THREE.Color(0xffd36b) } },
+      vertexShader: "varying float vY; void main(){ vY = position.y / 3.2; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.); }",
+      fragmentShader: "varying float vY; uniform float uT; uniform vec3 uC; void main(){ float a = (1.0 - vY) * (0.55 + 0.15 * sin(uT * 3.0 - vY * 9.0)); gl_FragColor = vec4(uC * a, a); }",
+    });
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.renderOrder = 7;
+    beam.raycast = () => {};
+    spot.add(beam);
+    spot.userData.beam = beamMat;
+  }
+  const spotMark = buildHideMarker(M);
+  spotMark.root.scale.setScalar(2.4);
+  spotMark.root.traverse((o) => { if (o.material) { o.material.depthTest = false; o.material.color && o.material.color.offsetHSL(0.12, 0.1, 0); o.renderOrder = 6; } });
+  spot.add(spotMark.root);
+  let spotLabel = null;
+  huntGroup.add(spot);
+  function showSpot(x, z, text) {
+    spot.position.set(x, groundY(x, z) + 0.01, z);
+    if (!spotLabel || spotLabel.userData.text !== text) {
+      if (spotLabel) { spot.remove(spotLabel); spotLabel.material.map.dispose(); spotLabel.material.dispose(); }
+      spotLabel = labelSprite(text, "#c47a00");
+      spotLabel.userData.text = text;
+      spotLabel.position.y = 1.15;
+      spotLabel.scale.set(1.9, 0.475, 1);
+      spotLabel.raycast = () => {};
+      spot.add(spotLabel);
+    }
+    spot.visible = true;
+  }
+  const hideSpot = () => { spot.visible = false; };
+
   const shovel = buildShovel(M);
   shovel.root.visible = false;
   const bubbles = [];
@@ -131,11 +172,13 @@ export function createPlay(ctx) {
     chest.root.position.set(x, y - 0.5, z);
     chest.setOpen(0);
     chestAnim = { t0: T, y0: y - 0.5, y1: y + 0.02 };
-    setFocus(() => world.localToWorld(new THREE.Vector3(x, y + 0.3, z)), 4.8, 6);
+    if (!found) showSpot(x, z, "🎁 宝藏藏在这里");
+    // 没挖到：镜头拉远一点，让光柱和挖过的坑都在画面里，停久一点
+    setFocus(() => world.localToWorld(new THREE.Vector3(x, y + 0.3, z)), found ? 4.8 : 6.5, found ? 6 : 8);
     await wait(1.1);
     chestAnim.open = T;
-    bubble(found ? "💰 挖到宝藏啦！" : "宝藏原来藏在这里～", new THREE.Vector3(x, y + 0.1, z), found ? "#d48a00" : "#6b6b9a");
-    await wait(2.2);
+    bubble(found ? "💰 挖到宝藏啦！" : "差一点！宝藏在这 👀", new THREE.Vector3(x, y + 0.5, z), found ? "#d48a00" : "#6b6b9a");
+    await wait(found ? 2.2 : 4.5);
     clearFocus();
   }
   // 藏宝的人：把宝箱埋进去（挖完以后宝箱沉下去）
@@ -184,7 +227,7 @@ export function createPlay(ctx) {
     const h = g.hunt;
     const lastTs = h && h.digs.length ? h.digs[h.digs.length - 1].ts : h ? h.ts : 0;
     const show = h && (h.status === "live" || (h.status !== "cancel" && now - lastTs < RECENT));
-    if (!h || h.id !== lastHuntId) { clearMounds(); chest.root.visible = false; lastHuntId = h ? h.id : null; }
+    if (!h || h.id !== lastHuntId) { clearMounds(); chest.root.visible = false; hideSpot(); lastHuntId = h ? h.id : null; }
     if (show) {
       for (const d of h.digs) if (!pendingDigs.has(d.x + "," + d.z)) addMound(d, false);
       previewHide(h.status === "live" && h.hider === me && h.x != null ? { x: h.x, z: h.z } : null);
@@ -193,7 +236,9 @@ export function createPlay(ctx) {
         chest.root.position.set(h.x, groundY(h.x, h.z) + 0.02, h.z);
         chest.setOpen(1);
       }
-    } else { clearMounds(); previewHide(null); if (!chestAnim) chest.root.visible = false; }
+      if (h.status === "lost" && h.x != null && !pendingDigs.size) showSpot(h.x, h.z, "🎁 宝藏藏在这里");
+      else if (h.status !== "lost") hideSpot();
+    } else { clearMounds(); previewHide(null); hideSpot(); if (!chestAnim) chest.root.visible = false; }
     // 钓鱼大赛
     const d = g.derby;
     const showBoard = d && (d.status === "live" || now - (d.until - 24 * 3600000) < 6 * 3600000);
@@ -258,6 +303,7 @@ export function createPlay(ctx) {
     for (let i = waits.length - 1; i >= 0; i--) if (t >= waits[i].at) { waits[i].res(); waits.splice(i, 1); }
     for (const m of mounds.values()) m.update(t, dt);
     if (marker.root.visible) marker.update(t);
+    if (spot.visible) { spotMark.update(t); spot.userData.beam.uniforms.uT.value = t; if (spotLabel) spotLabel.position.y = 1.15 + Math.sin(t * 2) * 0.05; }
     chest.update(t, dt);
     if (chestAnim) {
       const k = Math.min(1, (t - chestAnim.t0) / 1.0), e = 1 - Math.pow(1 - k, 3);
@@ -282,6 +328,8 @@ export function createPlay(ctx) {
 
   return {
     update, setGames, digAt, revealChest, buryChest, previewHide, bubble, rpsReveal,
+    // 面板上"看看藏在哪"：镜头转过去看几秒
+    lookAt(x, z) { setFocus(() => world.localToWorld(new THREE.Vector3(x, groundY(x, z) + 0.3, z)), 6.5, 5); },
     // 本机挖坑：先播动画，结果回来后插小旗
     async localDig(who, x, z, resultP) {
       const key = x + "," + z;

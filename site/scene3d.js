@@ -4,11 +4,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=13";
-import { buildDino } from "./dino3d.js?v=13";
-import { createDecor, encodePos } from "./decor3d.js?v=13";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=13";
-import { createBatcher } from "./batch3d.js?v=13";
+import { buildPet, SPECIES } from "./pet3d.js?v=14";
+import { buildDino } from "./dino3d.js?v=14";
+import { createDecor, encodePos } from "./decor3d.js?v=14";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=14";
+import { MAP } from "./island3d.js?v=14";
+import { createBatcher } from "./batch3d.js?v=14";
+import { glowSprite, season } from "./home3d.js?v=14";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -110,7 +112,12 @@ const trunk = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.19, 0.9
 trunk.position.y = 0.47;
 const branch = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.5, 7), toon(0x8a5a3b)), 0.025);
 branch.position.set(0.18, 0.85, 0.05); branch.rotation.z = -0.8;
-const LEAF = [0x58b873, 0x6fcf86, 0x4fae6a, 0x7fd88e];
+// 规律树跟着季节换装：春天粉色花、夏天绿、秋天红黄、冬天深绿；春秋还会飘花瓣 / 落叶
+const SEASON = season();
+const LEAF = {
+  spring: [0xf7a8c4, 0xffc4d8, 0xf093b5, 0xffd6e4], summer: [0x58b873, 0x6fcf86, 0x4fae6a, 0x7fd88e],
+  autumn: [0xf0a03c, 0xe8743b, 0xf6c453, 0xd95d39], winter: [0x4f9a6a, 0x5aa676, 0x478f60, 0x63ad7c],
+}[SEASON];
 const leaves = [[0, 1.35, 0, 0.62], [0.42, 1.2, 0.18, 0.45], [-0.4, 1.22, 0.1, 0.47], [0.05, 1.25, -0.4, 0.48],
   [0.1, 1.75, 0.05, 0.47], [-0.22, 1.6, 0.32, 0.36], [0.3, 1.58, -0.22, 0.36], [0.02, 2.08, 0, 0.3]].map(([x, y, z, r], i) => {
   const m = outlined(new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), toon(LEAF[i % LEAF.length])), 0.035);
@@ -126,6 +133,29 @@ const peaches = [[0.45, 1.0, 0.45], [-0.5, 1.05, 0.38], [0.2, 1.45, 0.55], [-0.1
 tree.add(trunk, branch, ...leaves, ...peaches);
 tree.position.set(1.95, 0, -1.25);
 world.add(tag(tree, "tree"));
+// 飘落的叶子 / 花瓣（一个 InstancedMesh）：从树冠里出来，左右飘着落到草地上，再从头来
+const falling = (() => {
+  if (SEASON !== "autumn" && SEASON !== "spring") return null;
+  const N = 12, geo = new THREE.SphereGeometry(0.05, 6, 4).scale(1, 0.25, 0.7);
+  const im = new THREE.InstancedMesh(geo, toon(0xffffff, { side: THREE.DoubleSide }), N);
+  const c = new THREE.Color();
+  for (let i = 0; i < N; i++) im.setColorAt(i, c.setHex(LEAF[i % LEAF.length]));
+  im.raycast = () => {};
+  im.frustumCulled = false;
+  world.add(im);
+  const seeds = Array.from({ length: N }, (_, i) => ({ p: i / N, a: i * 2.4, r: 0.2 + ((i * 37) % 10) / 18, sp: 0.07 + ((i * 13) % 7) / 100 }));
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), pos = new THREE.Vector3(), sc = new THREE.Vector3(1, 1, 1);
+  return (t) => {
+    seeds.forEach((s, i) => {
+      const k = (t * s.sp + s.p) % 1, y = 1.7 * (1 - k);
+      pos.set(tree.position.x + Math.cos(s.a + k * 2) * s.r * (1 + k) + Math.sin(t * 1.3 + i) * 0.15, y + 0.02, tree.position.z + Math.sin(s.a + k * 2) * s.r * (1 + k));
+      e.set(Math.sin(t * 2 + i) * 0.8, t + i, Math.cos(t * 1.7 + i) * 0.6);
+      sc.setScalar(k > 0.92 ? (1 - k) / 0.08 : 1);
+      im.setMatrixAt(i, m4.compose(pos, q.setFromEuler(e), sc));
+    });
+    im.instanceMatrix.needsUpdate = true;
+  };
+})();
 
 // 小床
 const bed = new THREE.Group();
@@ -152,7 +182,9 @@ const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), new THREE.Mes
 bulb.position.y = 0.98;
 const lampLight = new THREE.PointLight(0xffc870, 0, 4, 1.5);
 lampLight.position.y = 1.0;
-lamp.add(pole, bulb, lampLight);
+const bedGlow = glowSprite(0xffc870, 1.3);
+bedGlow.position.y = 0.98;
+lamp.add(pole, bulb, lampLight, bedGlow);
 lamp.position.set(-2.6, 0, 0.1);
 world.add(lamp);
 
@@ -303,6 +335,27 @@ function castShadows() {
   for (const o of [tree, bed, ...(pet ? [pet.root] : []), ...extraCasters, ...castActors]) o.traverse((m) => {
     if (m.isMesh && !m.material.side && !m.userData.noShadow && !m.material.transparent) m.castShadow = true; // 描边是 BackSide（side=1），不投影；透明的也不投
   });
+  for (const o of [...(pet ? [pet.root] : []), ...castActors]) addRim(o);
+}
+// 角色的轮廓光：侧面和背光的边缘亮一圈，让小伙伴从草地上"跳"出来（颜色跟天色走）
+const RIM = { color: { value: new THREE.Color(0xfff2d8) }, k: { value: 0.32 } };
+function addRim(root) {
+  root.traverse((m) => {
+    if (!m.isMesh) return;
+    for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+      if (!mat || !mat.isMeshToonMaterial || mat.userData.rim || mat.transparent || mat.side === THREE.BackSide) continue;
+      mat.userData.rim = true;
+      const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
+      mat.onBeforeCompile = function (sh, r) {
+        prev.call(this, sh, r);
+        sh.uniforms.uRimC = RIM.color; sh.uniforms.uRimK = RIM.k;
+        sh.fragmentShader = "uniform vec3 uRimC; uniform float uRimK;\n" + sh.fragmentShader.replace("#include <opaque_fragment>",
+          "float rimF = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);\noutgoingLight += uRimC * uRimK * smoothstep(0.55, 0.85, rimF);\n#include <opaque_fragment>");
+      };
+      mat.customProgramCacheKey = function () { return prevKey.call(this) + "|rim"; };
+      mat.needsUpdate = true;
+    }
+  });
 }
 const extraCasters = [], castActors = [];
 const fill = new THREE.DirectionalLight(0xffffff, 0.6); // 跟着相机的柔光，夜里也看得清脸
@@ -310,11 +363,13 @@ fill.position.set(0, 0.4, 1);
 camera.add(fill);
 scene.add(hemi, sun, camera);
 
+// 光：主光（太阳 / 月亮）暖、天光冷，阴影里自然偏蓝紫；补光（跟着镜头）只留一点，不然整个岛被"打平"。
+// 夜里整体压暗偏蓝，靠灯、窗户和萤火虫点亮。rim = 角色轮廓光。
 const SKY = {
-  dawn: { hemi: [0xffd9c2, 0x7f9a66, 1.6], sun: [0xffb07a, 2.0], lamp: 0.4, fill: 0.8 },
-  day: { hemi: [0xe3f4ff, 0x76a060, 1.8], sun: [0xffffff, 2.2], lamp: 0, fill: 0.5 },
-  dusk: { hemi: [0xffc1a8, 0x6a7f5a, 1.4], sun: [0xff9a6b, 1.7], lamp: 1.2, fill: 0.9 },
-  night: { hemi: [0x7a84d8, 0x2a3f50, 1.1], sun: [0xaab8ff, 0.7], lamp: 3.2, fill: 1.5 },
+  dawn: { hemi: [0xffd3c4, 0x7d8a8a, 1.15], sun: [0xffb486, 2.35], lamp: 0.5, fill: 0.4, rim: [0xffd2b0, 0.3] },
+  day: { hemi: [0xd4eaff, 0x8a9a7a, 1.2], sun: [0xfff1dc, 2.75], lamp: 0, fill: 0.28, rim: [0xfff6e2, 0.26] },
+  dusk: { hemi: [0xffb8a6, 0x5e6478, 1.0], sun: [0xff9466, 2.1], lamp: 1.4, fill: 0.45, rim: [0xffb98a, 0.38] },
+  night: { hemi: [0x5f6cc4, 0x1d2742, 0.85], sun: [0xa3b6ff, 0.8], lamp: 3.4, fill: 0.5, rim: [0x9fb6ff, 0.42] },
 };
 function hisHour(d) {
   const m = /^([+-])(\d\d):(\d\d)$/.exec((d && d.tz) || "+00:00");
@@ -333,6 +388,8 @@ function applySky(h) {
   sun.color.setHex(s.sun[0]); sun.intensity = s.sun[1];
   lampLight.intensity = s.lamp;
   fill.intensity = s.fill;
+  RIM.color.value.setHex(s.rim[0]); RIM.k.value = s.rim[1];
+  bedGlow.material.opacity = s.lamp > 1 ? (k === "night" ? 0.9 : 0.5) : 0;
   bulb.material.color.setHex(s.lamp > 1 ? 0xffe08a : 0xf3eee0);
 }
 
@@ -370,7 +427,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=13")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=14")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -563,6 +620,7 @@ const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
 
 function animate(t, dt) {
   W.update(t, dt);
+  if (falling) falling(t);
   if (cast) cast.update(t, dt, skyKind, world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())));
   if (extras) extras.update(t, dt);
   if (play) play.update(t, dt);
@@ -890,7 +948,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=13").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=14").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -953,7 +1011,7 @@ window.NEST3D = {
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=13");
+      const { createExtras } = await import("./extras3d.js?v=14");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;
@@ -970,9 +1028,10 @@ window.NEST3D = {
   playReady: castReady.then(async (c) => {
     if (!c) return null;
     try {
-      const { createPlay } = await import("./play3d.js?v=13");
+      const { createPlay } = await import("./play3d.js?v=14");
       play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
       castShadows();
+      dispatchEvent(new CustomEvent("nest:playready")); // 游戏状态可能比这里先到，让 social.js 再同步一次
     } catch (e) { console.warn("play3d", e); }
     return play;
   }),
@@ -985,6 +1044,8 @@ window.NEST3D = {
   revealChest: (x, z, o) => (play ? play.revealChest(x, z, o) : Promise.resolve()),
   buryChest: (who, x, z) => (play ? play.buryChest(who, x, z) : Promise.resolve()),
   previewHide: (p) => play && play.previewHide(p),
+  huntLook: (x, z) => play && play.lookAt(x, z),
+  mapInfo: MAP,
   screenAt: (x, y, z) => screenOf(world.localToWorld(new THREE.Vector3(x, y, z))), // 小岛坐标 → 屏幕坐标
   editStart() { edit = { sel: null, drag: false, changed: {} }; controls.autoRotate = false; },
   editRotate() { if (edit && edit.sel) { edit.sel.rotation.y += Math.PI / 4; edit.changed[edit.sel.userData.item] = true; } },
