@@ -4,10 +4,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=9";
-import { buildDino } from "./dino3d.js?v=9";
-import { createDecor, encodePos } from "./decor3d.js?v=9";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=9";
+import { buildPet, SPECIES } from "./pet3d.js?v=10";
+import { buildDino } from "./dino3d.js?v=10";
+import { createDecor, encodePos } from "./decor3d.js?v=10";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=10";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -20,6 +20,30 @@ const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const PIXEL = 3; // 像素模式下，一个渲染像素 = 3 个 CSS 像素
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 let pixelMode = store.get("nest.pixel") === "px";
+
+// 毛绒凹凸贴图（bumpMap）用屏幕导数算法线。有些安卓 GPU 上导数是 0，normalize(0) 得到 NaN，
+// 整只角色就被画成全黑。换成安全版：算不出来就退回原来的法线（只是少了一点毛绒质感）。
+{
+  const src = THREE.ShaderChunk.bumpmap_pars_fragment;
+  const a = src.indexOf("vec3 perturbNormalArb");
+  const b = src.indexOf("}", src.indexOf("return normalize", a)) + 1;
+  if (a >= 0 && b > a) THREE.ShaderChunk.bumpmap_pars_fragment = src.slice(0, a) + `vec3 perturbNormalArb( vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection ) {
+		vec3 dx = dFdx( surf_pos.xyz ) * 1000.0;
+		vec3 dy = dFdy( surf_pos.xyz ) * 1000.0;
+		float lx = dot( dx, dx ), ly = dot( dy, dy );
+		if ( !( lx > 1e-8 ) || !( ly > 1e-8 ) ) return surf_norm;
+		vec3 vSigmaX = dx * inversesqrt( lx );
+		vec3 vSigmaY = dy * inversesqrt( ly );
+		vec3 R1 = cross( vSigmaY, surf_norm );
+		vec3 R2 = cross( surf_norm, vSigmaX );
+		float fDet = dot( vSigmaX, R1 ) * faceDirection;
+		vec3 vGrad = sign( fDet ) * ( dHdxy.x * R1 + dHdxy.y * R2 );
+		vec3 n = abs( fDet ) * surf_norm - vGrad;
+		float ln = dot( n, n );
+		if ( !( ln > 1e-8 ) ) return surf_norm;
+		return n * inversesqrt( ln );
+	}` + src.slice(b);
+}
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "low-power" });
 renderer.setClearColor(0x000000, 0);
@@ -307,7 +331,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=9")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=10")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -743,7 +767,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=9").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=10").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -805,7 +829,7 @@ window.NEST3D = {
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=9");
+      const { createExtras } = await import("./extras3d.js?v=10");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;
