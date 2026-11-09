@@ -4,10 +4,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=10";
-import { buildDino } from "./dino3d.js?v=10";
-import { createDecor, encodePos } from "./decor3d.js?v=10";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=10";
+import { buildPet, SPECIES } from "./pet3d.js?v=11";
+import { buildDino } from "./dino3d.js?v=11";
+import { createDecor, encodePos } from "./decor3d.js?v=11";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=11";
+import { createBatcher } from "./batch3d.js?v=11";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -81,6 +82,7 @@ function outlined(mesh, thickness = 0.04) {
   const m = mergeVertices(g, 1e-4);
   m.computeVertexNormals();
   const mat = new THREE.MeshBasicMaterial({ color: OUTLINE, side: THREE.BackSide });
+  mat.userData.outline = thickness; // batch3d 合批时要用
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.thickness = { value: thickness };
     sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
@@ -98,6 +100,8 @@ scene.add(world);
 const tappables = [];
 const tag = (obj, what) => { obj.traverse((o) => { o.userData.what = what; }); tappables.push(obj); return obj; };
 const W = createWorld({ scene, world, toon, outlined, tag });
+// 风景里不动的小东西合批（?nobatch 关掉，排查用）；减少动态效果的设置下什么都不动，也就不用合
+const batcher = createBatcher(W.env, { enabled: !params.has("nobatch") && !REDUCED });
 const top = W.top;
 
 // 规律树：一团一团蓬松的树冠，挂几个小桃子
@@ -153,38 +157,73 @@ lamp.position.set(-2.6, 0, 0.1);
 world.add(lamp);
 
 // 花：今天的活动量，开花数 = strain（0–21）
+// 21 朵花 × 8 个零件，原来每个零件画一次（168 次）。现在零件只当"骨架"算位置，
+// 真正画的是 4 个 InstancedMesh（茎 / 花瓣 / 花心 / 花苞），一共 4 次。
 const flowers = new THREE.Group();
 const PETALS = [0xff8fab, 0xffd166, 0xc3a6ff, 0xff9e7a, 0x8fd3ff, 0xffffff];
 const flowerList = [];
+const flowerRig = new THREE.Group(); // 不加进场景，只用来算矩阵（和 flowers 同一个坐标系）
+const fParts = { stem: [], petal: [], heart: [], bud: [] };
 // 7 簇、每簇 3 朵，散在草地上（避开路、家和床），比排成一圈自然
 const FLOWER_CLUSTERS = [[-1.0, 2.2], [1.75, 1.75], [3.0, 0.2], [-2.95, -0.3], [-0.3, -1.55], [2.6, -1.6], [-2.05, 2.65]];
 for (let i = 0; i < 21; i++) {
   const [cx, cz] = FLOWER_CLUSTERS[i % 7], k = Math.floor(i / 7);
   const ang = k * 2.1 + i * 0.7, rr = 0.12 + k * 0.13;
   const f = new THREE.Group();
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.03, 0.34, 5), toon(0x3f9a55));
+  const stem = new THREE.Object3D();
   stem.position.y = 0.17;
+  fParts.stem.push(stem);
   const bloom = new THREE.Group();
-  const petalMat = toon(PETALS[i % PETALS.length]);
   for (let k = 0; k < 5; k++) {
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.075, 8, 6), petalMat);
+    const p = new THREE.Object3D();
     const pa = (k / 5) * Math.PI * 2;
     p.position.set(Math.cos(pa) * 0.09, 0, Math.sin(pa) * 0.09);
     p.scale.set(1, 0.5, 1);
+    p.userData.color = PETALS[i % PETALS.length];
     bloom.add(p);
+    fParts.petal.push(p);
   }
-  const heart = new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), toon(0xffe37a));
+  const heart = new THREE.Object3D();
   heart.position.y = 0.02;
   bloom.add(heart);
+  fParts.heart.push(heart);
   bloom.position.y = 0.38;
-  const bud = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), toon(0x5fae5f));
+  const bud = new THREE.Object3D();
   bud.position.y = 0.36;
+  fParts.bud.push(bud);
   f.add(stem, bloom, bud);
   f.position.set(cx + Math.cos(ang) * rr, 0, cz + Math.sin(ang) * rr);
   f.scale.setScalar(0.85 + ((i * 37) % 10) / 25);
   f.userData.phase = Math.random() * Math.PI * 2;
-  flowers.add(f);
+  flowerRig.add(f);
   flowerList.push({ f, bloom, bud, open: 0, target: 0 });
+}
+const flowerMeshes = [
+  ["stem", new THREE.CylinderGeometry(0.025, 0.03, 0.34, 5), 0x3f9a55],
+  ["petal", new THREE.SphereGeometry(0.075, 8, 6), 0xffffff],
+  ["heart", new THREE.SphereGeometry(0.05, 8, 6), 0xffe37a],
+  ["bud", new THREE.SphereGeometry(0.07, 8, 6), 0x5fae5f],
+].map(([k, geo, col]) => {
+  const list = fParts[k];
+  const im = new THREE.InstancedMesh(geo, toon(col), list.length);
+  im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  if (k === "petal") { const c = new THREE.Color(); list.forEach((p, i) => im.setColorAt(i, c.setHex(p.userData.color))); }
+  im.frustumCulled = false;
+  im.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.3, 0.4), 4.2); // 点击检测用：盖住所有花簇
+  flowers.add(im);
+  return { im, list };
+});
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+function syncFlowers() {
+  flowerRig.updateMatrixWorld(true);
+  for (const { im, list } of flowerMeshes) {
+    list.forEach((o, i) => {
+      let vis = true;
+      for (let p = o; p; p = p.parent) if (!p.visible) { vis = false; break; }
+      im.setMatrixAt(i, vis ? o.matrixWorld : ZERO);
+    });
+    im.instanceMatrix.needsUpdate = true;
+  }
 }
 world.add(tag(flowers, "flowers"));
 
@@ -331,7 +370,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=10")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=11")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -490,7 +529,7 @@ new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(host)
 function resize() {
   const w = host.clientWidth, h = host.clientHeight;
   if (!w || !h) return;
-  renderer.setPixelRatio(pixelMode ? 1 / PIXEL : Math.min(devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(pixelMode ? 1 / PIXEL : Math.min(devicePixelRatio || 1, QUALITY[quality].dpr));
   renderer.setSize(w, h);
   renderer.domElement.style.imageRendering = pixelMode ? "pixelated" : "auto";
   camera.aspect = w / h;
@@ -660,6 +699,7 @@ function animate(t, dt) {
     x.bud.visible = x.open < 0.5;
     x.f.rotation.z = Math.sin(t * 1.5 + x.f.userData.phase) * 0.08;
   }
+  syncFlowers();
 
   // ---- Zzz / 星星 / 爱心
   zzz.forEach((s, i) => {
@@ -701,15 +741,82 @@ function lerpAngle(a, b, k) {
 function loop(now) {
   requestAnimationFrame(loop);
   if (!visible || document.hidden) return;
-  if (now - last < 1000 / 45) return; // 最多 45fps，省电
+  if (!PERF_MAX && now - last < 1000 / 45) return; // 最多 45fps，省电
+  const gap = now - last;
   last = now;
   const t = clock.getElapsedTime();
   const dt = Math.min(0.1, t - lastT);
   lastT = t;
+  const c0 = performance.now();
   animate(REDUCED ? 0 : t, dt);
+  batcher.tick(t);
   focusCamera();
   controls.update();
+  const c1 = performance.now();
   renderer.render(scene, camera);
+  if (PERF) perfTick(gap, c1 - c0, performance.now() - c1);
+  adapt(gap, now);
+}
+
+// 自动画质：连续两段（每段 3 秒）实际帧率低于 24，就降一档。只降不升（避免来回跳）；
+// 记在本机，下次打开从"上次那档往回升一档"开始，重新试一下。像素模式是用户自己选的，不管。
+const QUALITY = [
+  { dpr: 2, shadow: 1024 },
+  { dpr: 1.5, shadow: 1024 },
+  { dpr: 1.25, shadow: 512 },
+  { dpr: 1, shadow: 0 },
+];
+let quality = Math.max(0, Math.min(QUALITY.length - 1, (parseInt(store.get("nest.q"), 10) || 0) - 1));
+if (params.has("q")) quality = Math.max(0, Math.min(QUALITY.length - 1, parseInt(params.get("q"), 10) || 0));
+let qWin = { n: 0, t0: 0, bad: 0 }, qGrace = performance.now() + 6000;
+function applyQuality(doResize = true) {
+  const q = QUALITY[quality];
+  if (q.shadow) {
+    sun.castShadow = true;
+    if (sun.shadow.mapSize.x !== q.shadow) {
+      sun.shadow.mapSize.set(q.shadow, q.shadow);
+      if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+    }
+  } else sun.castShadow = false;
+  if (doResize) resize();
+}
+function adapt(gap, now) {
+  if (pixelMode || PERF_MAX || params.has("q") || quality >= QUALITY.length - 1) return;
+  if (gap > 250 || now < qGrace) { qWin = { n: 0, t0: now, bad: qWin.bad }; return; } // 刚回到页面 / 刚加载（编译 shader）不算
+  if (!qWin.t0) qWin.t0 = now;
+  qWin.n++;
+  if (now - qWin.t0 < 3000) return;
+  const fps = (qWin.n * 1000) / (now - qWin.t0);
+  qWin.bad = fps < 24 ? qWin.bad + 1 : 0;
+  qWin.n = 0; qWin.t0 = now;
+  if (qWin.bad >= 2) {
+    quality++; qWin.bad = 0; qGrace = now + 4000;
+    store.set("nest.q", String(quality));
+    applyQuality();
+  }
+}
+if (quality) applyQuality(false); // 上次在这台设备上降过档（尺寸等文件末尾的 resize() 统一设）
+
+// ?perf：右上角显示帧率 / 绘制次数 / 三角形数（?perf=max 不限 45fps，看极限）。平时不开，零开销。
+const PERF = params.has("perf"), PERF_MAX = params.get("perf") === "max";
+if (PERF) window.__scene = scene; // 只在 ?perf 下暴露，方便在控制台拆分开销
+let perfBox = null, perfAcc = { n: 0, gap: 0, js: 0, rd: 0 };
+function perfTick(gap, js, rd) {
+  const a = perfAcc;
+  a.n++; a.gap += gap; a.js += js; a.rd += rd;
+  if (a.n < 30) return;
+  const i = renderer.info, m = { meshes: 0, visible: 0 };
+  scene.traverse((o) => { if (o.isMesh || o.isPoints || o.isSprite || o.isLine) { m.meshes++; if (o.visible) m.visible++; } });
+  window.__perf = {
+    fps: +(1000 / (a.gap / a.n)).toFixed(1), jsMs: +(a.js / a.n).toFixed(2), renderCpuMs: +(a.rd / a.n).toFixed(2),
+    calls: i.render.calls, tris: i.render.triangles, programs: i.programs.length,
+    geometries: i.memory.geometries, textures: i.memory.textures, objects: m.meshes,
+    px: [renderer.domElement.width, renderer.domElement.height], dpr: renderer.getPixelRatio(), quality, batch: batcher.stats,
+  };
+  if (!perfBox) { perfBox = document.createElement("pre"); perfBox.style.cssText = "position:absolute;top:6px;right:6px;margin:0;padding:4px 6px;font:10px/1.3 monospace;background:#0009;color:#fff;border-radius:6px;pointer-events:none;z-index:5"; host.appendChild(perfBox); }
+  const p = window.__perf;
+  perfBox.textContent = `${p.fps} fps  js ${p.jsMs}ms  render ${p.renderCpuMs}ms\ncalls ${p.calls}  tris ${(p.tris / 1000).toFixed(0)}k\nprog ${p.programs}  geo ${p.geometries}  tex ${p.textures}  obj ${p.objects}\nq${quality} dpr ${p.dpr}  batch ${p.batch ? p.batch.meshes + "→" + p.batch.draws : "…"}`;
+  perfAcc = { n: 0, gap: 0, js: 0, rd: 0 };
 }
 
 // 镜头：平时是全景慢慢转；钓鱼时转到码头的斜侧面；两只角色互动 / 扭蛋 / 浇水时推近成特写，结束后再慢慢退回去
@@ -767,7 +874,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=10").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=11").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -829,7 +936,7 @@ window.NEST3D = {
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=10");
+      const { createExtras } = await import("./extras3d.js?v=11");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;

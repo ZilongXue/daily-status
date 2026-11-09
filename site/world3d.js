@@ -2,7 +2,7 @@
 // 全部程序生成，没有外部模型。scene3d.js 负责小伙伴和互动，这里只管环境。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=10";
+import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=11";
 
 export const SEA_Y = -0.85;   // 海面高度（草地表面是 y = 0）
 export const ISLAND_R = 3.25; // 草地的最小半径（装饰的位置都按这个算）
@@ -468,6 +468,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   // 小礁石，上面站一只海鸥
   const reef = islet(7.0, 7.0, { R0: 0.45, H: SEA_Y + 0.5, seed: 41, cliff: () => 0.8, wob: 0.3, slope: [0.4, 0.25], beach: [0.2, 0.1] });
   const perch = makeGull(mk);
+  perch.userData.dynamic = true; // 偶尔扇一下翅膀，别被合批冻住
   perch.position.y = reef.userData.topY + 0.05;
   perch.scale.setScalar(0.9);
   reef.add(perch);
@@ -495,7 +496,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
   updaters.push((t, dt) => { clouds.rotation.y += dt * 0.012; });
 
   /* ------------------------------------------------------------ 海鸥（白天绕圈） */
-  const gulls = [0, 1].map((i) => { const g = makeGull(mk); g.userData.i = i; env.add(g); return g; });
+  const gulls = [0, 1].map((i) => { const g = makeGull(mk); g.userData.i = i; g.userData.dynamic = true; env.add(g); return g; });
   /* ------------------------------------------------------------ 蝴蝶（白天） */
   const flyCols = [0xffa6c9, 0xffe17a, 0xb9a7ff];
   const butterflies = flyCols.map((c, i) => {
@@ -513,7 +514,7 @@ export function createWorld({ scene, world, toon, outlined, tag }) {
     const bod = new THREE.Mesh(new THREE.CapsuleGeometry(0.018, 0.08, 3, 6), toon(0x4a2f25));
     bod.rotation.x = Math.PI / 2;
     b.add(bod);
-    b.userData = { wings, i };
+    b.userData = { wings, i, dynamic: true };
     env.add(b);
     return b;
   });
