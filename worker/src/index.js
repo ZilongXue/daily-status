@@ -178,9 +178,12 @@ export default {
       if (who === "me" || who === "her") ctx.waitUntil(env.DB.prepare("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)").bind("seen:" + who, String(Date.now())).run());
       const { results: seen } = await env.DB.prepare("SELECT k, v FROM meta WHERE k IN ('seen:me', 'seen:her')").all();
       const presence = Object.fromEntries(seen.map((x) => [x.k.slice(5), Number(x.v)]));
-      const { results } = await env.DB.prepare(
-        "SELECT id, ts, who, kind, item, n, box FROM events WHERE id > ? ORDER BY id DESC LIMIT 200").bind(since).all();
-      return json({ events: results.reverse(), now: Date.now(), presence, rt: true }, 200, cors);
+      // ?before=id：往前翻历史（小日记"加载更早的"），一次 200 条
+      const before = parseInt(url.searchParams.get("before") || "0", 10) || 0;
+      const { results } = before > 0
+        ? await env.DB.prepare("SELECT id, ts, who, kind, item, n, box FROM events WHERE id < ? ORDER BY id DESC LIMIT 200").bind(before).all()
+        : await env.DB.prepare("SELECT id, ts, who, kind, item, n, box FROM events WHERE id > ? ORDER BY id DESC LIMIT 200").bind(since).all();
+      return json({ events: results.reverse(), now: Date.now(), presence, rt: true, more: results.length === 200 }, 200, cors);
     }
 
     if (req.method === "POST") {
@@ -541,7 +544,7 @@ function json(body, status, headers) {
 // 只推她那边的动作；揍人类的高频动作做节流。推送不带任何内容（payload 为空），
 // 通知文字由手机上的 service worker 自己拉 /events 生成，推送服务（FCM）看不到内容。
 async function push(env, e) {
-  if (e.who !== "her" || !["feed", "angry", "hit", "calm", "note", "nudge", "buy", "mood", "sleep", "wake", "act", "fish", "answer", "tuck", "gacha", "hunt", "derby", "quiz", "wish", "wishdone"].includes(e.kind)) return;
+  if (e.who !== "her" || !["feed", "angry", "hit", "calm", "note", "nudge", "buy", "mood", "sleep", "wake", "act", "fish", "answer", "tuck", "gacha", "hunt", "derby", "quiz", "wish", "wishdone", "rps"].includes(e.kind)) return;
   if (e.kind === "fish" && RARITY[e.item] === "common") return; // 钓到普通的不打扰你
   if (e.kind === "gacha" && GACHA_RARITY[e.item] !== "epic") return;
   if (e.kind === "hit") {

@@ -244,9 +244,33 @@
     return bits.filter(Boolean).join(" · ") + st;
   }
 
+  // 小日记：全部历史，按天分组；一开始有最近 200 条，"加载更早的"再往前翻（每次 200 条）
+  let older = [], olderMore = false, olderLoading = false, tlOpen = false;
+  const noteCache = new Map();
+  const openCached = async (e) => { if (!noteCache.has(e.id)) noteCache.set(e.id, await open(e.box || "")); return noteCache.get(e.id); };
+  const dayKey = (ts) => { const d = new Date(ts); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+  function dayLabel(ts) {
+    const d = new Date(ts), today = new Date(), y = new Date(Date.now() - 86400000);
+    if (dayKey(ts) === dayKey(today)) return "今天";
+    if (dayKey(ts) === dayKey(y)) return "昨天";
+    return `${d.getMonth() + 1}月${d.getDate()}日 周${"日一二三四五六"[d.getDay()]}${d.getFullYear() !== today.getFullYear() ? ` · ${d.getFullYear()}` : ""}`;
+  }
+  async function loadOlder() {
+    if (olderLoading) return;
+    const oldest = (older[0] || events[0] || {}).id;
+    if (!oldest) return;
+    olderLoading = true;
+    try {
+      const r = await api("GET", null, "?before=" + oldest);
+      older = (r.events || []).concat(older);
+      olderMore = !!r.more;
+    } catch { say("没加载出来，网络好像不太好 😢"); }
+    olderLoading = false;
+    renderTimeline();
+  }
   async function renderTimeline() {
-    const recent = events.filter((e) => !["place", "move", "seed", "spend"].includes(e.kind) && !(e.kind === "farm" && (e.item || "").startsWith("useseed"))).slice(-15).reverse();
-    const lines = await Promise.all(recent.map(async (e) => {
+    const all = older.concat(events).filter((e) => !["place", "move", "seed", "spend"].includes(e.kind) && !(e.kind === "farm" && (e.item || "").startsWith("useseed"))).reverse();
+    const lines = await Promise.all(all.map(async (e) => {
       const w = whoName(e.who);
       let t = "";
       if (e.kind === "feed") t = `${w}喂了${(FOODS[e.item] || {}).name || "好吃的"} ${(FOODS[e.item] || {}).emoji || ""}`;
@@ -255,7 +279,7 @@
       else if (e.kind === "calm") t = `${w}气消了 🌈`;
       else if (e.kind === "sorry") t = `${w}认错了 🙇`;
       else if (e.kind === "flower") t = `${w}送了一朵花 🌹`;
-      else if (e.kind === "note") t = `${w}留言：「${await open(e.box || "")}」`;
+      else if (e.kind === "note") t = `${w}留言：「${await openCached(e)}」`;
       else if (e.kind === "star") t = `小岛收到 ${e.n} 颗星星 ⭐ · ${REASONS[(e.item || "").split(":")[0]] || "奖励"}`;
       else if (e.kind === "buy") t = `${w}给小岛买了${(ITEMS[e.item] || ["新东西", "🎁"])[0]} ${(ITEMS[e.item] || ["", ""])[1]}`;
       else if (e.kind === "nudge") t = e.who === me ? `我催${me === "her" ? "他" : "她"}睡觉啦 🌙` : `${w}催你睡觉啦 🌙`;
@@ -278,10 +302,26 @@
       else if (e.kind === "wishgrant") t = `${w}赢了一张愿望券 🎟`;
       else if (e.kind === "wish") t = `${w}写好了一个愿望 🎟`;
       else if (e.kind === "wishdone") t = `${w}兑现了一个愿望 ✅`;
-      return `<li class="${e.who === me ? "mine" : ""}"><span>${esc(t)}</span><time>${ago(new Date(e.ts).toISOString())}</time></li>`;
+      else if (e.kind === "rps") { if (e.item === "start") t = `${w}约了一局猜拳 ✊✌️✋${e.n ? "（押愿望券）" : ""}`; else return ""; }
+      if (!t) return "";
+      const today = dayKey(e.ts) === dayKey(Date.now());
+      const tm = today ? ago(new Date(e.ts).toISOString()) : new Date(e.ts).toTimeString().slice(0, 5);
+      return { day: dayKey(e.ts), ts: e.ts, html: `<li class="${e.who === me ? "mine" : ""}"><span>${esc(t)}</span><time>${tm}</time></li>` };
     }));
-    $("#timeline").innerHTML = lines.filter(Boolean).join("") || `<li class="muted">还没有互动，${me === "her" ? "先喂它点好吃的吧" : `等${HER()}来玩`} ✨</li>`;
+    let out = "", lastDay = null, n = 0;
+    for (const l of lines) {
+      if (!l) continue;
+      if (l.day !== lastDay) { out += `<li class="tl-day">${dayLabel(l.ts)}</li>`; lastDay = l.day; }
+      out += l.html; n++;
+    }
+    const canMore = older.length ? olderMore : firstMore;
+    out += canMore ? `<li class="tl-more"><button type="button" data-tl="more">${olderLoading ? "加载中…" : "加载更早的日记 ↓"}</button></li>` : n ? `<li class="tl-end">—— 小窝开张的第一天 ✨ ——</li>` : "";
+    $("#timeline").innerHTML = n ? out : `<li class="muted">还没有互动，${me === "her" ? "先喂它点好吃的吧" : `等${HER()}来玩`} ✨</li>`;
+    $("#timeline").classList.toggle("open", tlOpen);
+    const tb = $("#tl-toggle");
+    if (tb) { tb.hidden = n <= 12; tb.textContent = tlOpen ? "收起" : `展开全部（${n} 条）`; }
   }
+  let firstMore = false;
   function actText(e) {
     const other = e.who === "her" ? (me === "me" ? "你" : "他") : (me === "her" ? "你" : HER());
     return { hug: `抱了抱${other} 🤗`, pat: `摸了摸${other}的头 🫳`, kiss: `亲了${other}一下 😘`, highfive: `和${other}击了个掌 🙌`, poke: `戳了戳${other} 👉`, ride: "骑着小马绕岛兜风 🐴" }[e.item] || "做了点什么";
@@ -322,6 +362,8 @@
     else if (e.kind === "hunt" && e.item === "hide") { say(`🗺 ${whoName(e.who)}在小岛上藏了一个宝藏！去「一起玩」挖宝吧`); sfx("chime"); }
     else if (e.kind === "derby" && e.item === "start") { say(`🎣 ${whoName(e.who)}向你发起了钓鱼大赛！去「一起玩」应战`); sfx("chime"); }
     else if (e.kind === "quiz") { say(`💞 ${whoName(e.who)}交了今天的默契考验`); }
+    else if (e.kind === "rps" && e.item === "start") { say(`✊ ${whoName(e.who)}约你猜拳！去「一起玩 → 猜拳」出拳`); sfx("chime"); }
+    else if (e.kind === "rps" && e.item === "pick") { say(`🤫 ${whoName(e.who)}已经出好拳了`); }
     else if (e.kind === "wish") { say(`🎟 ${whoName(e.who)}写好了一个愿望，去「一起玩 → 愿望券」看看`); }
     else if (e.kind === "wishdone") { say(`✅ ${whoName(e.who)}兑现了你的愿望`); }
     else if (e.kind === "dfish") {
@@ -337,12 +379,13 @@
     try {
       const r = await api("GET", null, "?since=" + lastId + "&who=" + (me || ""));
       const fresh = r.events || [];
+      if (first) firstMore = !!r.more;
       if (r.presence) presence = r.presence;
       if (!fresh.length) { render(); if (first) renderTimeline(); return; }
       events = events.concat(fresh);
       lastId = fresh[fresh.length - 1].id;
       if (fresh.some((e) => ["star", "buy", "place", "fish", "gacha", "farm", "wear", "move", "seed", "spend"].includes(e.kind))) await loadWallet();
-      if (!first && fresh.some((e) => ["hunt", "dig", "derby", "dfish", "quiz", "wishgrant", "wish", "wishdone"].includes(e.kind))) loadGames();
+      if (!first && fresh.some((e) => ["hunt", "dig", "derby", "dfish", "quiz", "wishgrant", "wish", "wishdone", "rps"].includes(e.kind))) loadGames();
       if (!first) for (const e of fresh) await onRemote(e);
       render(); renderTimeline();
     } catch (e) {
@@ -673,7 +716,7 @@
       <li>🍙 每天第一次喂食 <b>+1</b> · 💌 同一天互相留言 <b>+1</b> · 🌈 吵架后和好 <b>+1</b> · 💭 ${HER()}每天报一次心情 <b>+1</b></li>
       <li>🎣 钓鱼：每人每天免费 3 竿，钓到锦鲤、鲸鱼、海龟、宝箱和传说级的宝贝都有星星，第一次钓到新东西再 <b>+1</b>（连续 14 竿没出史诗，第 15 竿保底）</li>
       <li>📝 每日一问两个人都答了 <b>+2</b> · 🛏 给对方盖被子 <b>+1</b> · 🧺 菜地收获 <b>+4～9</b> · 🎰 扭蛋偶尔出星星袋</li>
-      <li>🎮 一起玩：🗺 藏宝挖到 <b>+1～8</b>（铲数越少越多）· 🎣 钓鱼大赛比完 <b>+3</b> · 💞 默契考验 <b>+1～5</b> · 🍀 平时钓到今日幸运鱼 <b>+2</b></li></ul>
+      <li>🎮 一起玩：✊ 每天第一局猜拳 <b>+1</b> · 🗺 藏宝挖到 <b>+1～8</b>（铲数越少越多）· 🎣 钓鱼大赛比完 <b>+3</b> · 💞 默契考验 <b>+1～5</b> · 🍀 平时钓到今日幸运鱼 <b>+2</b></li></ul>
       <p class="muted">手环的星星每 10 分钟结算一次。最近入账：${(wallet.recent || []).slice(0, 5).map((x) => `${REASONS[x.item.split(":")[0]] || x.item} +${x.n}`).join(" · ") || "还没有"}</p>`;
     renderPanels();
   }
@@ -927,11 +970,11 @@
   });
 
   /* ------------------------------------------------------------ 小游戏：岛上藏宝 / 钓鱼大赛 / 默契大考验 / 愿望券 */
-  let games = null, gameTab = "hunt", huntMode = null, huntPick = null, quizDraft = null, derbyBusy = false, gamesSeen = null;
+  let games = null, gameTab = "rps", huntMode = null, huntPick = null, quizDraft = null, derbyBusy = false, gamesSeen = null;
   const otherOf = (w) => (w === "me" ? "her" : "me");
   const otherName = () => (me === "her" ? "他" : HER());
   const BAND = { hot: ["🔥", "超烫"], warm: ["♨️", "有点暖"], cool: ["🌬", "有点凉"], cold: ["❄️", "好冷"], found: ["💰", "挖到了"] };
-  const SRC = { hunt: "岛上藏宝", derby: "钓鱼大赛" };
+  const SRC = { hunt: "岛上藏宝", derby: "钓鱼大赛", rps: "石头剪刀布" };
   async function gamesApi(body) {
     const r = await fetch(API + "/games", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: me, ...body }) });
     const j = await r.json().catch(() => ({}));
@@ -976,6 +1019,8 @@
     }
     const pd = prev.derby, cd = cur.derby;
     if (cd && pd && cd.id === pd.id && pd.status === "live" && cd.status === "done") derbyOver(cd);
+    const pr = prev.rps, cr = cur.rps;
+    if (cr && (!pr || pr.id !== cr.id || cr.rounds.length > pr.rounds.length)) playRounds(cr, pr && pr.id === cr.id ? pr.rounds.length : 0);
     const pq = prev.quiz, cq = cur.quiz;
     if (cq && pq && cq.day === pq.day && !pq.result && cq.result) { say(`💞 默契考验揭晓：${cq.result.score}/10`); sfx("chime"); if (panel !== "games") burst(); }
   }
@@ -991,10 +1036,74 @@
     const el = $("#games");
     if (!el) return;
     if (!games) { el.innerHTML = `<p class="sub">加载中…</p>`; loadGames(); return; }
-    const tabs = [["hunt", "🗺 岛上藏宝"], ["derby", "🎣 钓鱼大赛"], ["quiz", "💞 默契考验"], ["wish", "🎟 愿望券"]];
+    const tabs = [["rps", "✊ 猜拳"], ["hunt", "🗺 岛上藏宝"], ["derby", "🎣 钓鱼大赛"], ["quiz", "💞 默契考验"], ["wish", "🎟 愿望券"]];
     const todo = (games.wishes || []).filter((w) => (w.who === me && !w.wish) || (w.wish && !w.done && w.who !== me)).length;
     el.innerHTML = `<div class="gtabs">${tabs.map(([k, t]) => `<button type="button" data-gtab="${k}" class="${gameTab === k ? "on" : ""}">${t}${k === "wish" && todo ? `<i class="dot">${todo}</i>` : ""}</button>`).join("")}</div><div id="gbody"></div>`;
-    ({ hunt: renderHunt, derby: renderDerby, quiz: renderQuiz, wish: renderWish })[gameTab]();
+    ({ rps: renderRps, hunt: renderHunt, derby: renderDerby, quiz: renderQuiz, wish: renderWish })[gameTab]();
+  }
+
+  // ---------------- 石头剪刀布（三局两胜）
+  const HAND = [["✊", "石头"], ["✌️", "剪刀"], ["✋", "布"]];
+  const rpsShown = new Set(); // 已经演过的局（id:序号），避免自己出拳的回包和轮询各演一遍
+  let rpsQueue = Promise.resolve(), rpsBusy = false;
+  function renderRps() {
+    const m = games.rps, el = $("#gbody"), on = otherName();
+    const live = m && m.status === "live";
+    let s = "";
+    if (!live) {
+      if (m && m.status === "done") s += `<p class="gres">上一局：${m.wins[me]} : ${m.wins[otherOf(me)]} · ${m.winner ? (m.winner === me ? "🏆 我赢了" : `${on}赢了`) : "平局"}${m.stake === "wish" && m.winner ? " · 愿望券归" + whoName(m.winner) : ""}</p>`;
+      if (m && m.status === "expired") s += `<p class="sub">上一局超过 12 小时没打完，作废了</p>`;
+      s += `<p class="sub">三局两胜，两个人都出完拳才揭晓（出拳交给服务器保管，谁也偷看不到）。赢的人走过去敲输的人一下 🔨，每天第一局打完小岛 +1 ⭐。</p>
+        <div class="row"><button class="bigbtn" data-rps="challenge" data-stake="none">✊ 约${on}猜拳</button><button class="bigbtn alt" data-rps="challenge" data-stake="wish">🎟 押一张愿望券</button></div>`;
+    } else {
+      const mine = m.myPick, theirsPicked = m.picked[otherOf(me)];
+      s += `<div class="rps-score"><span>我</span><b>${m.wins[me]}</b><i>:</i><b>${m.wins[otherOf(me)]}</b><span>${on}</span></div>
+        <p class="sub" style="text-align:center">第 ${m.rounds.length + 1} 局${m.stake === "wish" ? " · 🎟 押了愿望券" : ""} · ${theirsPicked ? `${on}已经出好了 🤫` : isOnline(otherOf(me)) ? `${on}还在想…` : `等${on}上线出拳`}</p>
+        <div class="rps-hands">${HAND.map(([e, n], i) => `<button type="button" data-rps="pick" data-r="${i}" class="${mine === i ? "on" : ""}" ${mine != null || rpsBusy ? "disabled" : ""}><span>${e}</span><small>${n}</small></button>`).join("")}</div>
+        ${mine != null ? `<p class="gres" style="text-align:center">出了${HAND[mine][1]} ${HAND[mine][0]}，等${on}…</p>` : ""}
+        <div class="row" style="justify-content:center"><button class="mini-btn" data-rps="quit">认输</button></div>`;
+      if (m.rounds.length) s += `<div class="ghist">${m.rounds.map((r, i) => `<div>第 ${i + 1} 局：我 ${HAND[r[me]][0]} vs ${HAND[r[otherOf(me)]][0]} ${on} · ${r.w ? (r.w === me ? "我赢" : on + "赢") : "平"}</div>`).join("")}</div>`;
+    }
+    const hist = (games.rpsHist || []).slice(-5).reverse();
+    if (hist.length) s += `<div class="ghist"><p class="sub">最近几局（Zilong : ${HER()}）</p>${hist.map((x) => `<div>${new Date(x.id).toLocaleDateString()} · ${x.wins.me} : ${x.wins.her} · ${x.winner ? "🏆 " + whoName(x.winner) : "平局"}${x.stake === "wish" ? " 🎟" : ""}</div>`).join("")}</div>`;
+    el.innerHTML = s;
+  }
+  // 依次演新揭晓的几局：头顶亮手势 → 说结果 → 打完了就让赢的人去敲一下
+  function playRounds(m, from) {
+    const R = window.NEST3D;
+    for (let i = from; i < m.rounds.length; i++) {
+      const key = m.id + ":" + i;
+      if (rpsShown.has(key)) continue;
+      rpsShown.add(key);
+      const r = m.rounds[i], last = i === m.rounds.length - 1;
+      rpsQueue = rpsQueue.then(async () => {
+        const shown = R && R.rpsReveal ? R.rpsReveal(r) : Promise.resolve();
+        await new Promise((res) => setTimeout(res, 1300)); // 手势亮出来的那一刻再说结果
+        const msg = `${whoName("me")} ${HAND[r.me][0]} vs ${HAND[r.her][0]} ${whoName("her")}：${r.w ? (r.w === me ? "我赢了这局！" : whoName(r.w) + "赢了这局") : "平局，再来一次"}`;
+        say(msg); sfx(r.w === me ? "chime" : "pop");
+        await shown;
+        if (last && m.status === "done") {
+          await new Promise((res) => setTimeout(res, 900));
+          const sc = `${m.wins[me]}:${m.wins[otherOf(me)]}`;
+          say(!m.winner ? "打平了 🤝" : m.winner === me ? `🏆 我赢了！${sc}${m.stake === "wish" ? " · 愿望券到手 🎟" : ""}` : `${whoName(m.winner)}赢了 ${m.wins[m.winner]}:${m.wins[me]}${m.stake === "wish" ? ` · 愿望券归${whoName(m.winner)}` : ""}，准备挨敲 🔨`);
+          if (m.winner === me) burst();
+          if (m.winner && R && R.play) await R.play("bonk", m.winner);
+          loadWallet();
+        }
+      });
+    }
+  }
+  async function rpsPick(r) {
+    if (rpsBusy) return;
+    rpsBusy = true;
+    try {
+      const res = await gamesApi({ game: "rps", op: "pick", r });
+      games.rps = res.rps;
+      sfx("pop");
+      if (res.round) playRounds(res.rps, res.rps.rounds.length - 1);
+    } catch (e) { say("没出上拳（" + e.message + "）"); }
+    rpsBusy = false;
+    renderGames();
   }
 
   // ---------------- 岛上藏宝
@@ -1216,6 +1325,15 @@
     const b = ev.target.closest("button");
     if (!b) return;
     if (b.dataset.gtab) { gameTab = b.dataset.gtab; renderGames(); return; }
+    if (b.dataset.tl === "more") { loadOlder(); return; }
+    if (b.dataset.tl === "toggle") { tlOpen = !tlOpen; renderTimeline(); return; }
+    if (b.dataset.rps) {
+      const k = b.dataset.rps;
+      if (k === "challenge") { try { await gamesApi({ game: "rps", op: "challenge", stake: b.dataset.stake }); say(`✊ 约${otherName()}猜拳啦，三局两胜！`); sfx("chime"); await loadGames(); } catch (e) { say("没约上（" + e.message + "）"); } }
+      else if (k === "pick") rpsPick(+b.dataset.r);
+      else if (k === "quit") { if (!confirm("真的认输吗？")) return; try { await gamesApi({ game: "rps", op: "quit" }); await loadGames(); } catch (e) { say(e.message); } }
+      return;
+    }
     if (b.dataset.hunt) {
       const k = b.dataset.hunt;
       if (k === "hide") startHunt("hide");

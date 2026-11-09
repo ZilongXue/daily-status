@@ -1,7 +1,7 @@
 // 小游戏在 3D 场景里的部分：藏宝（挖坑、小旗、宝箱）、钓鱼大赛的计分牌、奖杯、默契罐。
 // 模型在 games3d.js；这里负责摆放、走过去挖、和服务器状态同步。
 import * as THREE from "three";
-import { buildChest, buildDigMound, buildShovel, buildTrophy, buildScoreboard, buildHeartJar, buildHideMarker } from "./games3d.js?v=12";
+import { buildChest, buildDigMound, buildShovel, buildTrophy, buildScoreboard, buildHeartJar, buildHideMarker } from "./games3d.js?v=13";
 
 const FISH_NAME = { crucian: ["鲫鱼", "🐟"], clown: ["小丑鱼", "🐠"], puffer: ["河豚", "🐡"], shrimp: ["小虾", "🦐"], koi: ["锦鲤", "🎏"], jelly: ["水母", "🪼"], octopus: ["章鱼", "🐙"], turtle: ["海龟", "🐢"] };
 const BAND_TEXT = { hot: "🔥 超烫！", warm: "♨️ 有点暖", cool: "🌬 有点凉", cold: "❄️ 好冷…", found: "💰 挖到啦！" };
@@ -35,8 +35,26 @@ export function createPlay(ctx) {
   let chestAnim = null; // { t0, from, to, open }
 
   // 一整句话的气泡（白底圆角）
-  function labelSprite(text, color) {
+  function setLabel(sp, emoji) {
+    const c = sp.material.map.image, g = c.getContext("2d");
+    g.clearRect(0, 0, c.width, c.height);
+    g.fillStyle = "rgba(255,255,255,0.95)"; g.beginPath(); g.arc(64, 64, 58, 0, Math.PI * 2); g.fill();
+    g.font = "72px 'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(emoji, 64, 70);
+    sp.material.map.needsUpdate = true;
+  }
+  function labelSprite(text, color, round) {
     const c = document.createElement("canvas");
+    if (round) { // 圆形的 emoji 牌子（猜拳的手势）
+      c.width = c.height = 128;
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false, depthTest: false }));
+      sp.scale.set(0.55, 0.55, 1);
+      sp.renderOrder = 11;
+      setLabel(sp, text);
+      return sp;
+    }
     c.width = 512; c.height = 128;
     const g = c.getContext("2d");
     g.font = "800 56px 'PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif";
@@ -196,6 +214,44 @@ export function createPlay(ctx) {
   }
   const pendingDigs = new Set(); // 本机正在播动画的坑，先别从服务器状态里画出来
 
+  /* ------------------------------------------------------------ 石头剪刀布：头顶冒出手势 */
+  const HANDS = ["✊", "✌️", "✋"];
+  const handSprite = () => { const sp = labelSprite("✊", "#5a4636", true); sp.visible = false; world.add(sp); return sp; };
+  const hands = { me: null, her: null };
+  let rpsAnim = null; // { t0, picks: {me, her}, w }
+  function headTop(who) {
+    const a = actorOf(who), p = a.root().position.clone();
+    p.y += who === "her" ? 0.95 : 1.35;
+    return p;
+  }
+  // 摇三下"石头—剪刀—布"，然后亮出来；返回 promise（亮完 1.6 秒）
+  async function rpsReveal(round) {
+    for (const w of ["me", "her"]) { hands[w] ||= handSprite(); hands[w].visible = true; }
+    rpsAnim = { t0: T, round, shown: false };
+    await wait(1.25 + 1.6);
+    for (const w of ["me", "her"]) hands[w].visible = false;
+    rpsAnim = null;
+  }
+  function rpsTick(t) {
+    if (!rpsAnim) return;
+    const since = t - rpsAnim.t0, shake = since < 1.25;
+    for (const w of ["me", "her"]) {
+      const h = hands[w], p = headTop(w);
+      h.position.copy(p);
+      if (shake) h.position.y += Math.abs(Math.sin(since * Math.PI * 2.4)) * 0.18;
+      else if (!rpsAnim.shown) setLabel(h, HANDS[rpsAnim.round[w]]);
+      const win = !shake && rpsAnim.round.w === w;
+      h.scale.set(win ? 1.15 : 0.9, win ? 1.15 : 0.9, 1);
+    }
+    if (!shake && !rpsAnim.shown) {
+      rpsAnim.shown = true;
+      const mid = headTop("me").lerp(headTop("her"), 0.5).setY(1.25); // 两个手势牌的上方
+      if (rpsAnim.round.w) bubble(rpsAnim.round.w === "her" ? "她赢了这局！" : "他赢了这局！", mid, "#e2557c");
+      else bubble("平局，再来！", mid, "#6b6b9a");
+    }
+    if (shake && rpsAnim.lastShake !== "✊") { for (const w of ["me", "her"]) setLabel(hands[w], "✊"); rpsAnim.lastShake = "✊"; }
+  }
+
   /* ------------------------------------------------------------ 每帧 */
   function update(t, dt) {
     T = t;
@@ -221,10 +277,11 @@ export function createPlay(ctx) {
     }
     if (trophy.root.visible) trophy.update(t);
     if (jar.root.visible) jar.update(t, dt);
+    rpsTick(t);
   }
 
   return {
-    update, setGames, digAt, revealChest, buryChest, previewHide, bubble,
+    update, setGames, digAt, revealChest, buryChest, previewHide, bubble, rpsReveal,
     // 本机挖坑：先播动画，结果回来后插小旗
     async localDig(who, x, z, resultP) {
       const key = x + "," + z;

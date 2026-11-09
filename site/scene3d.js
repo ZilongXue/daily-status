@@ -4,11 +4,11 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=12";
-import { buildDino } from "./dino3d.js?v=12";
-import { createDecor, encodePos } from "./decor3d.js?v=12";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=12";
-import { createBatcher } from "./batch3d.js?v=12";
+import { buildPet, SPECIES } from "./pet3d.js?v=13";
+import { buildDino } from "./dino3d.js?v=13";
+import { createDecor, encodePos } from "./decor3d.js?v=13";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=13";
+import { createBatcher } from "./batch3d.js?v=13";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -370,7 +370,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=12")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=13")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -890,7 +890,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=12").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=13").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -953,7 +953,7 @@ window.NEST3D = {
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=12");
+      const { createExtras } = await import("./extras3d.js?v=13");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;
@@ -970,7 +970,7 @@ window.NEST3D = {
   playReady: castReady.then(async (c) => {
     if (!c) return null;
     try {
-      const { createPlay } = await import("./play3d.js?v=12");
+      const { createPlay } = await import("./play3d.js?v=13");
       play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
       castShadows();
     } catch (e) { console.warn("play3d", e); }
@@ -980,6 +980,7 @@ window.NEST3D = {
   setTapMode(fn) { tapMode = fn || null; if (fn) controls.autoRotate = false; else resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000); },
   localDig: (who, x, z, resultP) => (play ? play.localDig(who, x, z, resultP) : resultP),
   digAt: (who, x, z) => (play ? play.digAt(who, x, z) : Promise.resolve()),
+  rpsReveal: (round) => (play ? play.rpsReveal(round) : Promise.resolve()),
   remoteDigs: (who, list, end) => (play ? play.remoteDigs(who, list, end) : Promise.resolve()),
   revealChest: (x, z, o) => (play ? play.revealChest(x, z, o) : Promise.resolve()),
   buryChest: (who, x, z) => (play ? play.buryChest(who, x, z) : Promise.resolve()),

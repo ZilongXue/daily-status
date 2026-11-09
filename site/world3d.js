@@ -2,7 +2,7 @@
 // 全部程序生成，没有外部模型。scene3d.js 负责小伙伴和互动，这里只管环境。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=12";
+import { buildMainIsland, buildWater, heightAt as mainHeight, POOL } from "./island3d.js?v=13";
 
 export const SEA_Y = -0.85;   // 海面高度（草地表面是 y = 0）
 export const ISLAND_R = 3.25; // 草地的最小半径（装饰的位置都按这个算）

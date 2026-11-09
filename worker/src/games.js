@@ -298,6 +298,67 @@ async function quiz(env, b, deps) {
   return { ok: true, eid, result, quiz: await quizState(env, b.who, deps), push: { kind: "quiz", item: result ? "done" : "submit" } };
 }
 
+// ---------------------------------------------------------------- 石头剪刀布（三局两胜）
+// 出拳先交给服务器保管，两个人都出了才揭晓这一局（谁也偷看不到）。平局不算，重来。
+// 发起时可以押一张愿望券（赢的人拿）。每天第一场打完小岛 +1 ⭐。12 小时没打完就作废。
+const RPS_TTL = 12 * 3600000, RPS_WIN = 2;
+const beats = (a, b) => (b - a + 3) % 3 === 1; // 0 石头 1 剪刀 2 布
+function rpsView(m, who) {
+  if (!m) return null;
+  return { id: m.id, by: m.by, ts: m.ts, until: m.until, stake: m.stake, status: m.status, winner: m.winner ?? null, rounds: m.rounds, wins: m.wins,
+    picked: { me: m.picks.me != null, her: m.picks.her != null }, myPick: m.picks[who] };
+}
+async function rpsLoad(env) {
+  const m = await getMeta(env, "rps");
+  if (m && m.status === "live" && now() > m.until) { m.status = "expired"; await setMeta(env, "rps", m); }
+  return m;
+}
+async function rps(env, b, deps) {
+  const m = await rpsLoad(env);
+  const live = m && m.status === "live";
+  if (b.op === "challenge") {
+    if (live) return { error: "a match is already live", status: 409 };
+    const id = now();
+    const nm = { id, by: b.who, ts: id, until: id + RPS_TTL, stake: b.stake === "wish" ? "wish" : "none", picks: { me: null, her: null }, rounds: [], wins: { me: 0, her: 0 }, status: "live" };
+    await setMeta(env, "rps", nm);
+    const eid = await addEvent(env, b.who, "rps", "start", nm.stake === "wish" ? 1 : 0);
+    return { ok: true, rps: rpsView(nm, b.who), eid, push: { kind: "rps", item: "start" } };
+  }
+  if (!live) return { error: "no live match", status: 409 };
+  if (b.op === "quit") {
+    m.status = "done"; m.winner = other(b.who);
+    await rpsFinish(env, m, deps);
+    await setMeta(env, "rps", m);
+    return { ok: true, rps: rpsView(m, b.who), eid: 0 };
+  }
+  if (b.op !== "pick") return { error: "bad op", status: 400 };
+  if (!(Number.isInteger(b.r) && b.r >= 0 && b.r <= 2)) return { error: "bad pick", status: 400 };
+  if (m.picks[b.who] != null) return { error: "already picked", status: 409 };
+  m.picks[b.who] = b.r;
+  let round = null;
+  if (m.picks.me != null && m.picks.her != null) {
+    const a = m.picks.me, c = m.picks.her;
+    round = { me: a, her: c, w: a === c ? null : beats(a, c) ? "me" : "her", ts: now() };
+    m.rounds.push(round);
+    if (round.w) m.wins[round.w]++;
+    m.picks = { me: null, her: null };
+    if (m.wins.me >= RPS_WIN || m.wins.her >= RPS_WIN || m.rounds.length >= 15) {
+      m.status = "done";
+      m.winner = m.wins.me === m.wins.her ? null : m.wins.me > m.wins.her ? "me" : "her";
+      await rpsFinish(env, m, deps);
+    }
+  }
+  await setMeta(env, "rps", m);
+  const eid = await addEvent(env, b.who, "rps", round ? (m.status === "done" ? "end" : "round") : "pick", null);
+  return { ok: true, round, rps: rpsView(m, b.who), eid };
+}
+async function rpsFinish(env, m, deps) {
+  const day = deps.bjDay();
+  await deps.mint(env, `rps:${day}`, 1);
+  if (m.winner && m.stake === "wish") await grantWish(env, m.winner, `rps:${m.id}`);
+  await pushHist(env, "rps_hist", { id: m.id, wins: m.wins, winner: m.winner ?? null, stake: m.stake });
+}
+
 // ---------------------------------------------------------------- 愿望券 / 历史
 async function grantWish(env, who, source) { await addEvent(env, who, "wishgrant", source, null); }
 async function pushHist(env, k, rec, keep = 30) {
@@ -344,6 +405,8 @@ export async function gamesGet(env, who, deps) {
     derbyHist: await getMeta(env, "derby_hist", []),
     lucky: luckyFish(deps.bjDay()),
     quiz: await quizState(env, who, deps),
+    rps: rpsView(await rpsLoad(env), who),
+    rpsHist: await getMeta(env, "rps_hist", []),
     wishes: await wishes(env),
     trophy: trophy && trophy.until > now() ? trophy : null,
   };
@@ -352,5 +415,6 @@ export async function gamesPost(env, b, deps) {
   if (b.game === "hunt") return hunt(env, b, deps);
   if (b.game === "derby") return derby(env, b, deps);
   if (b.game === "quiz") return quiz(env, b, deps);
+  if (b.game === "rps") return rps(env, b, deps);
   return { error: "bad game", status: 400 };
 }

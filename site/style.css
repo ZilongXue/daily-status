@@ -374,3 +374,22 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 .wish-form { display: flex; gap: 6px; margin-top: 6px; }
 .wish-form input { flex: 1; min-width: 0; border: 2px solid #f3dfd2; border-radius: 10px; padding: 6px 8px; font: inherit; }
 .wish-form button { font: inherit; font-weight: 700; border: 0; border-radius: 10px; padding: 6px 12px; cursor: pointer; background: linear-gradient(135deg, #ffd1dc, #ffe9a8); }
+
+/* v13 猜拳 / 完整小日记 */
+.rps-score { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 2px; }
+.rps-score b { font-size: 40px; color: #e2557c; min-width: 30px; text-align: center; }
+.rps-score i { font-style: normal; font-size: 28px; color: var(--muted); }
+.rps-score span { font-weight: 700; color: var(--muted); }
+.rps-hands { display: flex; justify-content: center; gap: 10px; margin: 10px 0; }
+.rps-hands button { flex: 0 1 96px; display: flex; flex-direction: column; align-items: center; gap: 2px; font: inherit; border: 0; border-radius: 18px; padding: 10px 6px; cursor: pointer; background: #fff; box-shadow: 0 3px 0 #f1d5c4; }
+.rps-hands button span { font-size: 38px; line-height: 1.1; }
+.rps-hands button small { font-weight: 700; color: var(--muted); }
+.rps-hands button.on { background: #ffe0ea; box-shadow: 0 3px 0 #f2b8c9; }
+.rps-hands button:disabled:not(.on) { opacity: .45; }
+.panel .bigbtn.alt { background: linear-gradient(135deg, #e3f0ff, #f3e3ff); box-shadow: 0 3px 0 #c9d4ee; }
+.tl-title { display: flex; align-items: center; gap: 8px; }
+.tl-title .mini-btn { margin-left: auto; }
+.timeline.open { max-height: none; }
+.timeline li.tl-day { background: none; padding: 8px 2px 0; font-size: 12.5px; font-weight: 800; color: #c66a8a; position: sticky; top: 0; z-index: 1; background: linear-gradient(#fffaf5 70%, transparent); }
+.timeline li.tl-more, .timeline li.tl-end { background: none; justify-content: center; color: var(--muted); font-size: 12.5px; }
+.timeline li.tl-more button { font: inherit; font-weight: 700; font-size: 13px; border: 0; border-radius: 10px; padding: 6px 14px; cursor: pointer; background: #fff; box-shadow: 0 2px 0 #f1d5c4; color: var(--muted); }

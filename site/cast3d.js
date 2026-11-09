@@ -1,8 +1,8 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=12";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=12";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=13";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=13";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
@@ -272,6 +272,23 @@ export function createCast(ctx) {
       dino.react(dino.sleeping() ? "stir" : "blush");
       burst(hearts, world.worldToLocal(headOf(dino.parts())), 5, 0.7);
       await wait(0.5);
+    },
+    async bonk() { // 猜拳她赢了：拿小锤子敲恐龙
+      await herGoToDino(0.95);
+      setProp("🔨");
+      for (let i = 0; i < 2; i++) { await kAnim("swing", 0.32); dino.react("hit"); burst(stars, world.worldToLocal(headOf(dino.parts())), 3, 0.5); }
+      setProp(null);
+      await kAnim("hop", 0.6);
+    },
+    async me_bonk() { // 猜拳他赢了：恐龙走过去"咚"一下小猫
+      await dinoGoToHer(1.0);
+      for (let i = 0; i < 2; i++) {
+        dino.react("jump");
+        await wait(0.45);
+        await kAnim("startle", 0.4);
+        burst(stars, world.worldToLocal(headOf(kitten)), 3, 0.5);
+      }
+      await kAnim("blush", 0.8);
     },
     async me_tuck() { // 他给她盖被子：恐龙走过去摸摸头
       await dinoGoToHer(0.9);
