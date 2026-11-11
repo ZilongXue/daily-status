@@ -569,19 +569,50 @@
   addEventListener("pagehide", flushHits);
 
   /* ------------------------------------------------------------ 钓鱼：结果在后端抽；这里负责甩竿、咬钩、揭晓 */
+  // 连续钓：甩完一竿人留在钓点，岛上浮出「再甩一竿 / 收竿」；点水面也能再甩，点草地或 45 秒没动就自己回家
+  let paidOk = false, fishIdle = 0;
+  function castsLeft() {
+    const used = (wallet && wallet.casts && wallet.casts[me]) || 0, R = (wallet && wallet.fishRules) || { free: 3, price: 2, max: 10 };
+    return { used, R, sub: used < R.free ? `免费 ${R.free - used}` : used < R.max ? `⭐${R.price}` : "钓完啦" };
+  }
+  function syncFishBar() {
+    const R = window.NEST3D, bar = $("#fish-bar");
+    if (!bar) return;
+    const spot = R && R.fishSpot ? R.fishSpot() : null;
+    bar.hidden = !spot;
+    if (!spot) return;
+    const { used, R: rules, sub } = castsLeft(), busy = fishingNow || R.fishBusy();
+    const again = bar.querySelector("[data-fb=again]");
+    again.innerHTML = `🎣 ${busy ? "钓着呢…" : "再甩一竿"}<small>${sub}</small>`;
+    again.disabled = busy || used >= rules.max;
+    bar.querySelector("[data-fb=home]").disabled = busy;
+  }
+  async function leaveFish() {
+    clearTimeout(fishIdle); paidOk = false;
+    const R = window.NEST3D;
+    if (R && R.leaveFish) { const p = R.leaveFish(); syncFishBar(); await p; }
+    syncFishBar();
+  }
   async function goFish(spot = "sea") {
     const R = window.NEST3D;
-    if (fishingNow || (R && R.fishing && R.fishing())) { say("鱼竿还在水里呢～"); return; }
-    const used = (wallet && wallet.casts && wallet.casts[me]) || 0, rules = (wallet && wallet.fishRules) || { free: 3, price: 2, max: 10 };
-    if (used >= rules.max) { say("今天钓了好多啦，明天再来 🎣"); return; }
+    if (fishingNow || (R && (R.fishBusy ? R.fishBusy() : R.fishing()))) { say("鱼竿还在水里呢～"); return; }
+    clearTimeout(fishIdle);
+    const { used, R: rules } = castsLeft();
+    if (used >= rules.max) { say("今天钓了好多啦，明天再来 🎣"); await leaveFish(); return; }
     let pay = false;
     if (used >= rules.free) {
       if (wallet && wallet.balance < rules.price) { say(`今天的免费次数用完了，再钓一竿要 ${rules.price} 颗星星，星星不够哦`); return; }
-      if (!confirm(`今天的免费次数用完了，用 ${rules.price} 颗星星再钓一竿？`)) return;
-      pay = true;
+      if (!paidOk && !confirm(`今天的免费次数用完了，用 ${rules.price} 颗星星再钓一竿？（这次在水边连着钓都不再问）`)) return;
+      pay = paidOk = true;
     }
+    const at = R && R.fishSpot ? R.fishSpot() : null;
+    if (at && at !== spot) await leaveFish(); // 换钓点：先收竿
     fishingNow = true;
-    say("走去码头钓鱼啦 🎣");
+    // 从下面的按钮点进来时页面是往下滚的：先把小岛滚回来，才看得到浮漂、点得到水面
+    const sc = $("#scene").getBoundingClientRect();
+    if (sc.top < -40 || sc.bottom > innerHeight + 40) $("#scene").scrollIntoView({ behavior: "smooth", block: "start" });
+    say(at === spot ? "再甩一竿～ 🎣" : spot === "pool" ? "去水潭边钓鱼啦 🎣" : "走去码头钓鱼啦 🎣");
+    syncFishBar();
     const request = async () => {
       const r = await fetch(API + "/fish", { method: "POST", headers: { authorization: "Bearer " + (await getToken()), "content-type": "application/json" }, body: JSON.stringify({ who: me, pay, spot }) });
       const j = await r.json().catch(() => ({}));
@@ -589,13 +620,30 @@
       return { ...j, who: me };
     };
     try {
-      const res = R && R.fish ? await R.fish(me, request, { spot }) : await request();
+      const res = R && R.fish ? await R.fish(me, request, { spot, stay: true, session: true }) : await request();
       if (res && res.error) say("鱼跑了…（" + res.error + "）");
       else if (res && !(R && R.fish)) await reveal({ detail: res });
     } catch (e) { say("鱼跑了…网络好像不太好 😢"); }
-    fishingNow = false;
-    await loadWallet(); await poll(); render(); renderTimeline();
+    syncFishBar();
+    await loadWallet().catch(() => {}); fishingNow = false; // 次数刷新完再放开下一竿（免费 / 付费要看最新的次数）
+    syncFishBar();
+    await poll(); render(); renderTimeline();
+    if (castsLeft().used >= rules.max) setTimeout(leaveFish, 2500);
+    else fishIdle = setTimeout(leaveFish, 45000);
   }
+  (() => {
+    const bar = document.createElement("div");
+    bar.className = "fish-bar"; bar.id = "fish-bar"; bar.hidden = true;
+    bar.innerHTML = `<button type="button" data-fb="again"></button><button type="button" data-fb="home">🏠 收竿</button>`;
+    $("#scene").appendChild(bar);
+    bar.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (!b || b.disabled) return;
+      if (b.dataset.fb === "again") goFish(window.NEST3D.fishSpot() || "sea"); else leaveFish();
+    });
+  })();
+  addEventListener("nest:fish-again", (ev) => { if (!fishingNow && !(window.NEST3D && window.NEST3D.fishBusy())) goFish(ev.detail.spot); });
+  addEventListener("nest:fish-leave", () => { if (!fishingNow) { say("收竿回家啦 🏠"); leaveFish(); } });
   addEventListener("nest:fish-miss", (ev) => { document.querySelectorAll(".bite").forEach((x) => x.remove()); if (ev.detail.pts != null || ev.detail.derby) derbyToast({ catch: null, miss: ev.detail.miss }, ev.detail.who || me); });
   // 咬钩：在浮漂上冒一个"快拉！"
   addEventListener("nest:fish-bite", (ev) => {
@@ -619,19 +667,25 @@
     }
     if (d.catch === "boot") extra = `<p class="muted">……是谁的靴子啊 😂</p>`;
     const card = document.createElement("div");
-    card.className = "catch-card r-" + (d.rarity || c[2]);
+    const lite = (d.rarity || c[2]) === "common" && !d.first && !d.record && !extra;
+    const atSpot = window.NEST3D && window.NEST3D.fishSpot && window.NEST3D.fishSpot();
+    card.className = "catch-card r-" + (d.rarity || c[2]) + (lite ? " lite" : "");
     card.innerHTML = `<div class="cc-in"><small style="color:${rar[1]}">${"★".repeat({ common: 1, rare: 2, epic: 3, legend: 4 }[d.rarity] || 1)} ${rar[0]}</small>
       <div class="cc-emo">${c[1]}</div><b>${c[0]}</b>
       ${d.first ? `<p class="first">第一次钓到！收进图鉴 📖</p>` : ""}
       ${d.cm ? `<p class="muted">${d.cm} cm${d.record ? ` · <b style="color:#e0752d">新纪录！</b>` : ""}${d.bag ? " · 放进背包了 🎒" : ""}</p>` : ""}
       ${d.stars ? `<p class="gain">+${d.stars} ⭐</p>` : ""}${d.pity ? `<p class="muted">（保底）</p>` : ""}${extra}
-      <button>收下</button></div>`;
+      <div class="cc-btns">${lite ? "" : `<button data-cc="ok">收下</button>`}${!lite && atSpot && castsLeft().used < castsLeft().R.max ? `<button data-cc="again">🎣 再来一竿</button>` : ""}</div></div>`;
     await new Promise((r) => setTimeout(r, d.rarity === "legend" ? 1800 : 1100)); // 先看 3D 里的鱼出水，再弹卡片
     document.body.appendChild(card);
     sfx(d.rarity === "common" ? "pop" : "chime");
     if (d.rarity === "legend" || d.rarity === "epic") { const p = headPos(); hearts(p.x, p.y, 30); }
-    card.addEventListener("click", (e) => { if (e.target.tagName === "BUTTON" || e.target === card) card.remove(); });
-    setTimeout(() => card.remove(), d.catch === "bottle" ? 20000 : 9000);
+    card.addEventListener("click", (e) => {
+      const b = e.target.closest("button");
+      if (b && b.dataset.cc === "again") { card.remove(); const R = window.NEST3D; const go = () => (R.fishBusy() || fishingNow ? setTimeout(go, 150) : goFish(R.fishSpot() || "sea")); go(); return; }
+      if (b || e.target === card || lite) card.remove();
+    });
+    setTimeout(() => card.remove(), d.catch === "bottle" ? 20000 : lite ? 3800 : 9000);
   }
   addEventListener("nest:fish-reveal", reveal);
 

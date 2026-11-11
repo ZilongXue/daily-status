@@ -2,9 +2,9 @@
 // 模型都在各自的模块里（gacha3d / farm3d / xmas3d / outfit3d / weather3d），这里只负责摆放和编排。
 // 任何一个模块加载失败都只会少那一块，不影响别的。
 import * as THREE from "three";
-import { FARM, heightAt } from "./island3d.js?v=15";
+import { FARM, heightAt } from "./island3d.js?v=15.1";
 
-const V = "?v=15";
+const V = "?v=15.1";
 const load = (m) => import(`./${m}.js${V}`).catch((e) => { console.warn(m, e); return null; });
 export const GACHA_SPOT = { x: 2.95, z: 1.75 };
 

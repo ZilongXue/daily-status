@@ -473,3 +473,22 @@ body.photo-on .scene { position: sticky; top: 0; z-index: 60; }
 .hs-labels { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
 .hs-labels button { position: absolute; left: 0; top: 0; pointer-events: auto; border: 0; border-radius: 99px; padding: 3px 8px; font: 600 11px/1.2 system-ui, "PingFang SC", sans-serif; color: var(--ink); background: rgba(255,255,255,.88); box-shadow: 0 2px 6px rgba(0,0,0,.12); cursor: pointer; white-space: nowrap; }
 .scene.inside .species, .scene.inside .px-toggle, .scene.inside .l-evt, .scene.inside .hint, .scene.inside .bubble, .scene.inside .game-hint { display: none !important; }
+
+/* v15.1 连续钓鱼：站在水边时浮在小岛上的「再甩一竿 / 收竿」；普通鱼用不挡屏的小卡片 */
+.fish-bar { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 7; display: flex; gap: 8px; animation: fadein .25s; }
+.fish-bar[hidden] { display: none; }
+.fish-bar button { border: 0; border-radius: 99px; padding: 8px 16px; font: 800 15px ui-rounded, system-ui, "PingFang SC", sans-serif; cursor: pointer;
+  background: rgba(255,255,255,.92); box-shadow: 0 3px 0 rgba(0,0,0,.12), 0 4px 14px rgba(0,0,0,.15); color: #4a3d5c; white-space: nowrap; }
+.fish-bar [data-fb=again] { background: #ffe08a; box-shadow: 0 3px 0 #e0b84a, 0 4px 14px rgba(0,0,0,.15); }
+.fish-bar button small { display: block; font-size: 11px; font-weight: 700; opacity: .7; }
+.fish-bar button:disabled { opacity: .55; cursor: default; }
+.scene:has(.fish-bar:not([hidden])) .hint, .scene:has(.fish-bar:not([hidden])) .species { visibility: hidden; }
+.scene.inside .fish-bar, body.photo-on .fish-bar { display: none !important; }
+.catch-card .cc-btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+.catch-card .cc-btns:empty { display: none; }
+.catch-card [data-cc=again] { background: #ffe08a; }
+.catch-card.lite { background: none; pointer-events: none; place-items: start center; padding-top: max(70px, env(safe-area-inset-top)); }
+.catch-card.lite .cc-in { pointer-events: auto; width: min(240px, 72vw); padding: 12px 14px 12px; cursor: pointer; }
+.catch-card.lite .cc-emo { font-size: 44px; margin: 2px 0; }
+.catch-card.lite b { font-size: 18px; }
+.catch-card.lite button { margin-top: 8px; padding: 7px 18px; }

@@ -4,13 +4,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=15";
-import { buildDino } from "./dino3d.js?v=15";
-import { createDecor, encodePos } from "./decor3d.js?v=15";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=15";
-import { MAP } from "./island3d.js?v=15";
-import { createBatcher } from "./batch3d.js?v=15";
-import { glowSprite, season } from "./home3d.js?v=15";
+import { buildPet, SPECIES } from "./pet3d.js?v=15.1";
+import { buildDino } from "./dino3d.js?v=15.1";
+import { createDecor, encodePos } from "./decor3d.js?v=15.1";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=15.1";
+import { MAP, POOL } from "./island3d.js?v=15.1";
+import { createBatcher } from "./batch3d.js?v=15.1";
+import { glowSprite, season } from "./home3d.js?v=15.1";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -430,7 +430,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=15")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=15.1")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -557,9 +557,22 @@ renderer.domElement.addEventListener("pointerup", (e) => {
     return;
   }
   const hit = pick(e);
+  // 连续钓：站在钓点上时，点水面（码头前的海 / 水潭里）= 再甩一竿；点草地 = 收竿回家
+  const spot = cast && cast.localSpot();
+  if (spot) {
+    const gp = spot === "pool" ? groundPoint(e) : null;
+    const wantCast = spot === "sea" ? hit && (hit.object.userData.what === "sea" || hit.object.userData.what === "beach")
+      : gp && Math.hypot(gp.x - POOL.x, gp.z - POOL.z) < POOL.r + 0.5;
+    if (wantCast) {
+      W.splash(gp || world.worldToLocal(hit.point.clone()));
+      dispatchEvent(new CustomEvent("nest:fish-again", { detail: { spot, x: e.clientX, y: e.clientY } }));
+      return;
+    }
+  }
   if (life3d && life3d.tap(hit, e, ray)) return;
   if (!hit) return;
   const what = hit.object.userData.what;
+  if (spot && what === "ground") { if (!cast.localBusy()) dispatchEvent(new CustomEvent("nest:fish-leave")); return; }
   if (what === "gacha" || what === "farm" || what === "xmas") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what, x: e.clientX, y: e.clientY } })); return; }
   if (what === "her" || what === "pony") {
     const at = what === "her" ? cast.kittenScreen() : { x: e.clientX, y: e.clientY };
@@ -908,18 +921,19 @@ function perfTick(gap, js, rd) {
 
 // 镜头：平时是全景慢慢转；钓鱼时转到码头的斜侧面；两只角色互动 / 扭蛋 / 浇水时推近成特写，结束后再慢慢退回去
 const DOCK_VIEW = Math.atan2(-DOCK.dir.z + 0.7 * DOCK.dir.x, DOCK.dir.x + 0.7 * DOCK.dir.z);
-const baseTarget = controls.target.clone(), dockTarget = DOCK.base.clone().lerp(DOCK.tip, 0.55).setY(0.2);
+const baseTarget = controls.target.clone(), dockTarget = DOCK.base.clone().lerp(DOCK.tip, 0.55).setY(0.2), poolTarget = new THREE.Vector3(POOL.x, 0.35, POOL.z);
 let baseDist = 16, narrow = false, focusReq = null, wasActive = false;
 function setFocus(get, dist = 7.5, sec = 0) {
   focusReq = { get: typeof get === "function" ? get : () => get, dist, until: sec ? performance.now() + sec * 1000 : Infinity };
 }
 function clearFocus() { focusReq = null; }
 function focusCamera() {
-  const fishing = !!(cast && cast.fishing());
+  const ff = cast ? cast.fishFocus() : null, fishing = !!ff;
   if (focusReq && performance.now() > focusReq.until) focusReq = null;
   if (edit) { wasActive = true; return; }
   let wantT = baseTarget, wantD = baseDist, wantTh = null;
-  if (fishing) { wantT = dockTarget; wantD = baseDist * 0.8; wantTh = DOCK_VIEW; }
+  if (ff === "pool") { wantT = poolTarget; wantD = baseDist * 0.62; }
+  else if (fishing) { wantT = dockTarget; wantD = baseDist * 0.8; wantTh = DOCK_VIEW; }
   else if (focusReq) {
     const p = focusReq.get();
     if (p) { wantT = new THREE.Vector3(p.x, Math.max(0.35, p.y), p.z); wantD = focusReq.dist * (narrow ? 1.3 : 1); }
@@ -961,7 +975,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=15").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=15.1").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -1019,12 +1033,15 @@ window.NEST3D = {
   fish: (who, request, opts) => (cast ? cast.fish(who, request, opts) : opts && opts.derby ? Promise.resolve(null) : request()),
   leaveDock: (who) => cast && cast.leaveDock(who),
   pullFish: () => cast && cast.pull(),
+  fishSpot: () => (cast ? cast.localSpot() : null),
+  fishBusy: () => !!(cast && cast.localBusy()),
+  leaveFish: () => (cast ? cast.leaveLocal() : Promise.resolve()),
   fishing: (actor) => !!(cast && cast.fishing(actor)),
   setBook: (b) => { lastBook = b || {}; if (cast) cast.setBook(b); },
   // v15 小岛生活：宠物 / 岛民 / 小船 / 突发事件 / 远方小岛 / 小木屋室内 / 拍照
   lifeReady: castReady.then(async () => {
     try {
-      const { createLife3D } = await import("./life3d.js?v=15");
+      const { createLife3D } = await import("./life3d.js?v=15.1");
       life3d = createLife3D({ scene, world, camera, renderer, controls, toon, outlined, W, DOCK, SEA_Y, decor, screenOf, setFocus, clearFocus, walkable, textSprite,
         isNight: () => skyKind === "night", bookIds: () => Object.keys(lastBook) });
       castShadows();
@@ -1048,7 +1065,7 @@ window.NEST3D = {
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
     try {
-      const { createExtras } = await import("./extras3d.js?v=15");
+      const { createExtras } = await import("./extras3d.js?v=15.1");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
     } catch (e) { console.warn("extras", e); }
     return extras;
@@ -1065,7 +1082,7 @@ window.NEST3D = {
   playReady: castReady.then(async (c) => {
     if (!c) return null;
     try {
-      const { createPlay } = await import("./play3d.js?v=15");
+      const { createPlay } = await import("./play3d.js?v=15.1");
       play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
       castShadows();
       dispatchEvent(new CustomEvent("nest:playready")); // 游戏状态可能比这里先到，让 social.js 再同步一次

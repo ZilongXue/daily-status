@@ -3,7 +3,7 @@
 // 不动的东西按材质合并成几块（顶点色），每个热点一块自己的材质（方便单独高亮）。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { glowSprite } from "./home3d.js?v=15";
+import { glowSprite } from "./home3d.js?v=15.1";
 
 export const INTERIOR_IDS = ["stove", "incubator", "photowall", "aquarium", "shelf", "mailbox", "recipes", "door"];
 // 推荐的热点标签（HTML 标签用）

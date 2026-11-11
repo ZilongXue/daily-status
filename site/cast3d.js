@@ -1,11 +1,11 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildFish } from "./fishgen3d.js?v=15";
-import { FISH } from "./fishdata.js?v=15";
-import { POOL } from "./island3d.js?v=15";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=15";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=15";
+import { buildFish } from "./fishgen3d.js?v=15.1";
+import { FISH } from "./fishdata.js?v=15.1";
+import { POOL } from "./island3d.js?v=15.1";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=15.1";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=15.1";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
@@ -367,6 +367,7 @@ export function createCast(ctx) {
     if (sl.state !== "idle") return null;
     sl.state = "walking";
     sl.local = opts.local !== false;
+    sl.session = !!opts.session; // 自己点的"连续钓"：钓完站在原地等下一竿
     if (who === "her" && S.riding) seatKitten(false);
     const go = (p) => (who === "her" ? move(her, p, 2.4) : dino.go(p));
     // 瀑布下的水潭（v15）：站在水潭靠草地这一边，浮漂落在水潭中间；钓完直接走回家
@@ -464,6 +465,7 @@ export function createCast(ctx) {
     dropRod(sl);
     sl.state = "walking";
     sl.atDock = false;
+    sl.session = false;
     const who = sl.actor;
     const pool = sl.atPool;
     if (who === "her") { her.face = null; if (!pool) await move(her, DOCK.base, 2.2); await move(her, HER_HOME, 1.8); }
@@ -478,6 +480,17 @@ export function createCast(ctx) {
     sl.state = "walking";
     sl.atDock = false;
     await endFishing(sl, false);
+  }
+  // 连续钓：本机玩家现在站在哪个钓点（"sea" 码头 / "pool" 水潭 / null）、是不是正忙着、收竿回家
+  const sessionSlots = () => slotList.filter((sl) => sl.session && sl.local && sl.atDock);
+  function localSpot() { const sl = sessionSlots()[0]; return sl ? (sl.atPool ? "pool" : "sea") : null; }
+  function localBusy() { return slotList.some((sl) => sl.local && sl.state !== "idle"); }
+  function leaveLocal() { return Promise.all(sessionSlots().map((sl) => leaveDock(sl.actor))); }
+  // 镜头对准哪：有人在水潭钓 → 水潭；码头上有人 → 码头
+  function fishFocus() {
+    const on = slotList.filter((sl) => sl.state !== "idle" || sl.atDock);
+    if (!on.length) return null;
+    return on.every((sl) => sl.atPool) ? "pool" : "dock";
   }
   function pull() { for (const sl of slotList) if (sl.pull && sl.local) { sl.pull(); return true; } return false; }
 
@@ -749,7 +762,7 @@ export function createCast(ctx) {
   }
 
   return {
-    update, play, setState, fish, pull, setBook, walkHer, leaveDock,
+    update, play, setState, fish, pull, setBook, walkHer, leaveDock, localSpot, localBusy, leaveLocal, fishFocus,
     // 小游戏用：让小猫走到某处（返回到达的 promise）/ 朝向某处
     herGo: (p) => { if (S.riding) seatKitten(false); manualUntil = T + 25; her.face = null; return move(her, p, 1.6); },
     herFace: (fn) => { her.face = fn; },

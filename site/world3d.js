@@ -2,9 +2,9 @@
 // 全部程序生成，没有外部模型。scene3d.js 负责小伙伴和互动，这里只管环境。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildMainIsland, buildWater, heightAt as mainHeight, POOL, MAP, PATH_LINES, softRock } from "./island3d.js?v=15";
-import { buildHome, glowSprite, STONE_PATH, HOME, season } from "./home3d.js?v=15";
-import { cloudGeometry } from "./weather3d.js?v=15";
+import { buildMainIsland, buildWater, heightAt as mainHeight, POOL, MAP, PATH_LINES, softRock } from "./island3d.js?v=15.1";
+import { buildHome, glowSprite, STONE_PATH, HOME, season } from "./home3d.js?v=15.1";
+import { cloudGeometry } from "./weather3d.js?v=15.1";
 
 // 二维值噪声（草丛成片、石头摆放用）
 const hash2 = (x, y) => { const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return s - Math.floor(s); };
