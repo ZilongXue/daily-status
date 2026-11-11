@@ -7,8 +7,8 @@
 //   没有事件时：所有东西都从场景里摘掉（0 次绘制），update() 直接返回。
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { POOL } from "./island3d.js?v=15.1";
-import { HOME, glowSprite } from "./home3d.js?v=15.1";
+import { POOL } from "./island3d.js?v=16";
+import { HOME, glowSprite } from "./home3d.js?v=16";
 
 const REDUCED = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 const ISLE_SEA_Y = -0.85;

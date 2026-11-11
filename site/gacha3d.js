@@ -6,7 +6,7 @@ import {
   kit, X, rng, sph, ell, hemi, cyl, cone, tor, lathe, rod, roundBox, weld, tube, starGeo, heartGeo,
   stripeByAngle, merge, caneGeo, caneTex, rowTex, eyeInto, smileGeo, onBall,
   buildXmasTree, xmasTreeTick, buildSnowmanFamily,
-} from "./xmas3d.js";
+} from "./xmas3d.js?v=16";
 
 const TAU = Math.PI * 2;
 const V3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);

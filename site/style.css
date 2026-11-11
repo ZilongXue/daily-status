@@ -102,7 +102,7 @@ main { max-width: 760px; margin: 0 auto; padding: 22px 16px 40px; }
 .pet-wrap { position: absolute; left: 50%; bottom: 40px; width: 170px; transform: translateX(-50%); }
 .scene3d { position: absolute; inset: 0; }
 .scene3d canvas { display: block; width: 100%; height: 100%; }
-.scene.has3d, .scene.loading3d { height: 420px; }
+.scene.has3d, .scene.loading3d { height: clamp(320px, 60svh, 640px); }
 .scene.loading3d .pet-wrap, .scene.loading3d .hill { visibility: hidden; }
 .scene.loading3d::after { content: "小岛浮上来中…"; position: absolute; left: 0; right: 0; top: 55%; text-align: center; color: rgba(255,255,255,.8); font-size: 13px; }
 .scene.has3d .pet-wrap, .scene.has3d .hill, .scene.has3d .cloud { display: none; }
@@ -492,3 +492,50 @@ body.photo-on .scene { position: sticky; top: 0; z-index: 60; }
 .catch-card.lite .cc-emo { font-size: 44px; margin: 2px 0; }
 .catch-card.lite b { font-size: 18px; }
 .catch-card.lite button { margin-top: 8px; padding: 7px 18px; }
+
+
+/* ================= v16 沉浸模式：小岛铺满屏幕；面板变成底部抽屉（竖屏）/ 右侧一栏（横屏） ================= */
+.view-btn { position: absolute; right: 12px; top: 12px; z-index: 7; width: 36px; height: 36px; border: 0; border-radius: 50%; font-size: 17px; line-height: 1; cursor: pointer;
+  background: rgba(255,255,255,.85); box-shadow: 0 2px 8px rgba(0,0,0,.15); color: #4a3d5c; }
+.scene:not(.has3d) .view-btn { display: none; }
+.sheet-handle { display: none; }
+body.immersive { overflow: hidden; overscroll-behavior: none; }
+body.immersive main { padding: 0; max-width: none; }
+body.immersive main > :not(.scene):not(#social) { display: none !important; }
+body.immersive .scene { position: fixed; left: 0; top: 0; right: 0; height: calc(100dvh - var(--sheet, 150px)); margin: 0; border-radius: 0; box-shadow: none; z-index: 30; }
+body.immersive.photo-on .scene { position: fixed; z-index: 60; height: 100dvh; }
+body.immersive .scene .view-btn { top: calc(10px + env(safe-area-inset-top)); }
+body.immersive .scene .bubble { top: calc(14px + env(safe-area-inset-top)); }
+body.immersive .l-evt { top: calc(62px + env(safe-area-inset-top)); }
+body.immersive .scene3d canvas { touch-action: none !important; }
+body.immersive #social { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; z-index: 31; height: var(--sheet, 150px); box-sizing: border-box;
+  overflow-y: auto; overscroll-behavior: contain; border-radius: 20px 20px 0 0; padding: 0 12px calc(12px + env(safe-area-inset-bottom)); box-shadow: 0 -6px 24px rgba(80, 50, 30, .16); }
+body.immersive.sheet-peek #social { overflow: hidden; }
+body.immersive #social-main { display: flex; flex-direction: column; }
+body.immersive .wallet { display: contents; }
+body.immersive .sheet-handle { display: flex; order: 0; position: sticky; top: 0; z-index: 2; align-items: center; justify-content: center; gap: 10px; margin: 0 -12px; padding: 7px 12px 4px; background: var(--card); cursor: pointer; touch-action: none; }
+.sheet-handle i { width: 40px; height: 5px; border-radius: 9px; background: #e6d6cb; }
+.sheet-handle span { position: absolute; right: 14px; font-size: 12px; color: var(--muted); }
+body.immersive #actions { order: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-top: 2px; padding-bottom: 4px; gap: 6px; }
+body.immersive #actions::-webkit-scrollbar { display: none; }
+body.immersive #actions button { flex: 0 0 auto; min-width: 66px; padding: 8px 10px; font-size: 14px; }
+body.immersive #tabs { order: 2; margin-top: 6px; }
+body.immersive #tray { order: 3; } body.immersive #note-form { order: 4; }
+body.immersive .panel { order: 5; } body.immersive .wallet-head { order: 6; margin-top: 12px; padding: 8px 10px; border-radius: 14px; background: linear-gradient(135deg, #fff7d6, #ffeef4); }
+body.immersive #anger { order: 7; } body.immersive #social-main > .full { order: 8; margin-top: 10px; } body.immersive #her-status { order: 9; }
+body.immersive .tl-title { order: 10; } body.immersive #timeline { order: 11; max-height: none; }
+body.immersive .who-pick { padding-top: 14px; }
+body.immersive .game-bar, body.immersive .edit-bar { bottom: calc(var(--sheet, 150px) + 10px); }
+body.immersive .catch-card.lite { padding-top: calc(64px + env(safe-area-inset-top)); }
+@media (orientation: landscape) {
+  body.immersive { --side: min(400px, 40vw); }
+  body.immersive .scene { right: var(--side); height: 100dvh; }
+  body.immersive.photo-on .scene { right: 0; }
+  body.immersive #social { left: auto; top: 0; width: var(--side); height: 100dvh; border-radius: 0; padding-top: env(safe-area-inset-top); overflow-y: auto !important; box-shadow: -6px 0 24px rgba(80, 50, 30, .14); }
+  body.immersive .sheet-handle { display: none; }
+  body.immersive #actions { flex-wrap: wrap; overflow: visible; margin-top: 10px; }
+  body.immersive #actions button { flex: 1 1 auto; }
+  body.immersive .game-bar, body.immersive .edit-bar { bottom: 14px; left: calc((100vw - var(--side)) / 2); width: min(520px, calc(100vw - var(--side) - 24px)); }
+  body.immersive .edit-bar { width: auto; }
+  body.immersive .catch-card { right: var(--side); }
+}

@@ -4,13 +4,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=15.1";
-import { buildDino } from "./dino3d.js?v=15.1";
-import { createDecor, encodePos } from "./decor3d.js?v=15.1";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=15.1";
-import { MAP, POOL } from "./island3d.js?v=15.1";
-import { createBatcher } from "./batch3d.js?v=15.1";
-import { glowSprite, season } from "./home3d.js?v=15.1";
+import { buildPet, SPECIES } from "./pet3d.js?v=16";
+import { buildDino } from "./dino3d.js?v=16";
+import { createDecor, encodePos } from "./decor3d.js?v=16";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=16";
+import { MAP, POOL } from "./island3d.js?v=16";
+import { createBatcher } from "./batch3d.js?v=16";
+import { glowSprite, season } from "./home3d.js?v=16";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -49,6 +49,8 @@ let pixelMode = store.get("nest.pixel") === "px";
 }
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "low-power" });
+// 线上不查着色器编译日志（查日志会逼 GPU 当场编完，手机上加载时一卡一卡的）；本地开发照查
+renderer.debug.checkShaderErrors = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) && !new URLSearchParams(location.search).has("fastshader");
 renderer.setClearColor(0x000000, 0);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -69,7 +71,7 @@ controls.autoRotateSpeed = 0.5;
 renderer.domElement.style.touchAction = "pan-y"; // 竖着划照常滚动页面，横着划转小岛
 let resumeTimer = 0;
 controls.addEventListener("start", () => { controls.autoRotate = false; clearTimeout(resumeTimer); });
-controls.addEventListener("end", () => { resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 6000); });
+controls.addEventListener("end", () => { resumeTimer = setTimeout(() => { if (userZoom > 0.98) controls.autoRotate = !REDUCED; }, 6000); });
 
 /* ---------------------------------------------------------------- materials */
 const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
@@ -78,11 +80,17 @@ grad.needsUpdate = true;
 const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
 const OUTLINE = 0x4a2f25;
 
+// 描边网格按几何体缓存（v16）：同一个几何体（树叶、石头、栏杆…）只合并一次顶点
+const outlineGeo = new WeakMap();
 function outlined(mesh, thickness = 0.04) {
-  const g = mesh.geometry.clone();
-  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
-  const m = mergeVertices(g, 1e-4);
-  m.computeVertexNormals();
+  let m = outlineGeo.get(mesh.geometry);
+  if (!m) {
+    const g = mesh.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+    m = mergeVertices(g, 1e-4);
+    m.computeVertexNormals();
+    outlineGeo.set(mesh.geometry, m);
+  }
   const mat = new THREE.MeshBasicMaterial({ color: OUTLINE, side: THREE.BackSide });
   mat.userData.outline = thickness; // batch3d 合批时要用
   mat.onBeforeCompile = (sh) => {
@@ -362,6 +370,29 @@ const fill = new THREE.DirectionalLight(0xffffff, 0.6); // 跟着相机的柔光
 fill.position.set(0, 0.4, 1);
 camera.add(fill);
 scene.add(hemi, sun, camera);
+// 点光源数量固定（v16）：three.js 按"场景里有几盏点光"编译着色器，后来多一盏灯（钓鱼的光、装饰灯、夜里的灯）
+// 所有材质都得重编一遍，手机上一卡好几秒。所以先摆几盏不亮的占位灯，真灯亮起来就熄掉一盏占位，总数不变。
+const LIGHT_BUDGET = 7;
+const spareLights = Array.from({ length: LIGHT_BUDGET }, () => {
+  const l = new THREE.PointLight(0x000000, 0, 0.01, 2);
+  l.position.set(0, -60, 0); l.userData.spare = true;
+  scene.add(l);
+  return l;
+});
+function balanceLights() {
+  let real = 0;
+  scene.traverseVisible((o) => { if (o.isPointLight && !o.userData.spare) real++; });
+  for (let i = 0; i < LIGHT_BUDGET; i++) spareLights[i].visible = i < LIGHT_BUDGET - real;
+}
+// 新模块（小岛生活、扭蛋菜地、小游戏）加进来以后，先停画几帧，在后台把它们的着色器编好（手机支持并行编译时界面不卡），最多停 3 秒
+let warming = false;
+function warmUp(max = 3000) {
+  if (!renderer.compileAsync) return Promise.resolve();
+  warming = true;
+  balanceLights();
+  return Promise.race([renderer.compileAsync(scene, camera).catch(() => {}), new Promise((r) => setTimeout(r, max))]).then(() => { warming = false; });
+}
+const idle = () => new Promise((r) => (window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 800 }) : setTimeout(r, 120)));
 
 // 光：主光（太阳 / 月亮）暖、天光冷，阴影里自然偏蓝紫；补光（跟着镜头）只留一点，不然整个岛被"打平"。
 // 夜里整体压暗偏蓝，靠灯、窗户和萤火虫点亮。rim = 角色轮廓光。
@@ -430,7 +461,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=15.1")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=16")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -532,6 +563,37 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
   }
 });
 function stopHold() { holding = false; }
+
+// 缩放（v16）：双指捏 / 滚轮（沉浸模式里，或者触控板捏合）把镜头拉近；拉近以后镜头跟着自己的角色走
+let userZoom = 1;
+const ZOOM_MIN = 0.38, ZOOM_MAX = 1.2;
+const touches = new Map();
+let pinch = null;
+const setZoom = (z) => { userZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)); if (userZoom < 0.98) { controls.autoRotate = false; clearTimeout(resumeTimer); } };
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    pinch = { d0: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, z0: userZoom };
+    clearTimeout(holdTimer); stopHold(); downAt = null;
+  }
+}, true);
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pinch && touches.size >= 2) {
+    const [a, b] = [...touches.values()];
+    setZoom(pinch.z0 * pinch.d0 / (Math.hypot(a[0] - b[0], a[1] - b[1]) || 1));
+  }
+});
+const liftTouch = (e) => { touches.delete(e.pointerId); if (pinch) { downAt = null; if (touches.size < 2) pinch = null; } };
+renderer.domElement.addEventListener("pointerup", liftTouch, true);
+renderer.domElement.addEventListener("pointercancel", liftTouch, true);
+renderer.domElement.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey && !document.body.classList.contains("immersive")) return; // 普通模式下滚轮照常滚页面
+  e.preventDefault();
+  setZoom(userZoom * Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+}, { passive: false });
 let tapMode = null;
 const tapPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 function groundPoint(e) {
@@ -624,7 +686,11 @@ function resize() {
   renderer.domElement.style.imageRendering = pixelMode ? "pixelated" : "auto";
   camera.aspect = w / h;
   if (life3d) life3d.resizeInterior();
-  baseDist = w < 500 ? 21 : 16;
+  // 让整座岛横向、纵向都放得下：宽屏看高度，竖长屏看宽度；竖长屏（沉浸模式竖着拿）镜头抬高一点，岛在画面里更"立"
+  const aspect = w / h, tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const tall = aspect < 0.8;
+  baseDist = Math.max(9.2 / (2 * tan), (tall ? 10.6 : 11.2) / (2 * tan * aspect));
+  controls.minPolarAngle = controls.maxPolarAngle = tall ? 0.98 : 1.13;
   narrow = w < 500;
   const off = camera.position.clone().sub(controls.target).setLength(baseDist);
   camera.position.copy(controls.target).add(off);
@@ -846,6 +912,7 @@ function loop(now) {
   const t = clock.getElapsedTime();
   const dt = Math.min(0.1, t - lastT);
   lastT = t;
+  if (warming) return; // 正在后台编新着色器：这几帧先不画
   if (life3d && life3d.inside()) { life3d.renderInside(t, dt); adapt(gap, now); return; } // 在小木屋里：只画室内
   const c0 = performance.now();
   animate(REDUCED ? 0 : t, dt);
@@ -853,6 +920,7 @@ function loop(now) {
   focusCamera();
   controls.update();
   const c1 = performance.now();
+  balanceLights();
   renderer.render(scene, camera);
   if (PERF) perfTick(gap, c1 - c0, performance.now() - c1);
   adapt(gap, now);
@@ -899,7 +967,7 @@ if (quality) applyQuality(false); // 上次在这台设备上降过档（尺寸�
 
 // ?perf：右上角显示帧率 / 绘制次数 / 三角形数（?perf=max 不限 45fps，看极限）。平时不开，零开销。
 const PERF = params.has("perf"), PERF_MAX = params.get("perf") === "max";
-if (PERF) window.__scene = scene; // 只在 ?perf 下暴露，方便在控制台拆分开销
+if (PERF) { window.__scene = scene; window.__renderer = renderer; } // 只在 ?perf 下暴露，方便在控制台拆分开销
 let perfBox = null, perfAcc = { n: 0, gap: 0, js: 0, rd: 0 };
 function perfTick(gap, js, rd) {
   const a = perfAcc;
@@ -938,7 +1006,16 @@ function focusCamera() {
     const p = focusReq.get();
     if (p) { wantT = new THREE.Vector3(p.x, Math.max(0.35, p.y), p.z); wantD = focusReq.dist * (narrow ? 1.3 : 1); }
   }
-  const active = fishing || !!focusReq;
+  let follow = false;
+  if (!fishing && !focusReq) {
+    wantD = baseDist * userZoom;
+    // 拉近了：镜头跟着自己的角色（他是小恐龙，她是小猫），越近跟得越紧
+    if (userZoom < 0.8) {
+      const k = cast && window.NEST_WHO === "her" ? (cast.kitten.root || cast.kitten) : pet && pet.root;
+      if (k) { follow = true; wantT = new THREE.Vector3(k.position.x, 0.55, k.position.z).lerp(baseTarget, Math.max(0, (userZoom - 0.4) / 0.4) * 0.5); }
+    }
+  }
+  const active = fishing || !!focusReq || follow;
   if (active) { controls.autoRotate = false; clearTimeout(resumeTimer); }
   const off = camera.position.clone().sub(controls.target);
   let r = off.length();
@@ -948,7 +1025,7 @@ function focusCamera() {
   controls.target.lerp(wantT, active ? 0.07 : 0.035);
   r += (wantD - r) * (active ? 0.07 : 0.035);
   camera.position.copy(controls.target).add(new THREE.Vector3(Math.sin(ph) * Math.sin(th), Math.cos(ph), Math.sin(ph) * Math.cos(th)).multiplyScalar(r));
-  if (wasActive && !active) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 4000);
+  if (wasActive && !active && userZoom > 0.98) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 4000);
   wasActive = active;
 }
 
@@ -975,7 +1052,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=15.1").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=16").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -1039,13 +1116,14 @@ window.NEST3D = {
   fishing: (actor) => !!(cast && cast.fishing(actor)),
   setBook: (b) => { lastBook = b || {}; if (cast) cast.setBook(b); },
   // v15 小岛生活：宠物 / 岛民 / 小船 / 突发事件 / 远方小岛 / 小木屋室内 / 拍照
-  lifeReady: castReady.then(async () => {
+  lifeReady: castReady.then(() => warmUp()).then(idle).then(async () => {
     try {
-      const { createLife3D } = await import("./life3d.js?v=15.1");
+      const { createLife3D } = await import("./life3d.js?v=16");
       life3d = createLife3D({ scene, world, camera, renderer, controls, toon, outlined, W, DOCK, SEA_Y, decor, screenOf, setFocus, clearFocus, walkable, textSprite,
         isNight: () => skyKind === "night", bookIds: () => Object.keys(lastBook) });
       castShadows();
       if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__life3d = life3d; // 本地测试用
+      await warmUp();
       dispatchEvent(new CustomEvent("nest:lifeready"));
     } catch (e) { console.warn("life3d", e); }
     return life3d;
@@ -1064,9 +1142,11 @@ window.NEST3D = {
   species: () => kind,
   // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
   extrasReady: castReady.then(async (c) => {
+    await window.NEST3D.lifeReady; await idle(); // 一个一个来，别挤在同一帧里初始化
     try {
-      const { createExtras } = await import("./extras3d.js?v=15.1");
+      const { createExtras } = await import("./extras3d.js?v=16");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
+      await warmUp();
     } catch (e) { console.warn("extras", e); }
     return extras;
   }),
@@ -1081,10 +1161,12 @@ window.NEST3D = {
   // 小游戏：藏宝 / 钓鱼大赛 / 默契罐
   playReady: castReady.then(async (c) => {
     if (!c) return null;
+    await window.NEST3D.extrasReady; await idle();
     try {
-      const { createPlay } = await import("./play3d.js?v=15.1");
+      const { createPlay } = await import("./play3d.js?v=16");
       play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
       castShadows();
+      await warmUp();
       dispatchEvent(new CustomEvent("nest:playready")); // 游戏状态可能比这里先到，让 social.js 再同步一次
     } catch (e) { console.warn("play3d", e); }
     return play;
@@ -1128,9 +1210,13 @@ window.NEST3D = {
 setSpecies(kind);
 update();
 resize();
-requestAnimationFrame(loop);
-sceneEl.classList.add("has3d");
-sceneEl.classList.remove("loading3d");
+// 先在后台把着色器编好再开始画（手机支持并行编译时不卡界面），最多等 4 秒
+balanceLights();
+warmUp(6000).then(() => {
+  requestAnimationFrame(loop);
+  sceneEl.classList.add("has3d");
+  sceneEl.classList.remove("loading3d");
+});
 decor.loadCatalog().finally(() => dispatchEvent(new Event("nest:3dready")));
 setInterval(() => { extraCasters.length = 0; world.children.forEach((c) => { if (c.userData.item) extraCasters.push(c); }); castShadows(); }, 3000);
 setTimeout(() => document.getElementById("hint")?.classList.add("gone"), 9000);

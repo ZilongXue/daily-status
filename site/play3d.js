@@ -1,7 +1,7 @@
 // 小游戏在 3D 场景里的部分：藏宝（挖坑、小旗、宝箱）、钓鱼大赛的计分牌、奖杯、默契罐。
 // 模型在 games3d.js；这里负责摆放、走过去挖、和服务器状态同步。
 import * as THREE from "three";
-import { buildChest, buildDigMound, buildShovel, buildTrophy, buildScoreboard, buildHeartJar, buildHideMarker } from "./games3d.js?v=15.1";
+import { buildChest, buildDigMound, buildShovel, buildTrophy, buildScoreboard, buildHeartJar, buildHideMarker } from "./games3d.js?v=16";
 
 const FISH_NAME = { crucian: ["鲫鱼", "🐟"], clown: ["小丑鱼", "🐠"], puffer: ["河豚", "🐡"], shrimp: ["小虾", "🦐"], koi: ["锦鲤", "🎏"], jelly: ["水母", "🪼"], octopus: ["章鱼", "🐙"], turtle: ["海龟", "🐢"] };
 const BAND_TEXT = { hot: "🔥 超烫！", warm: "♨️ 有点暖", cool: "🌬 有点凉", cold: "❄️ 好冷…", found: "💰 挖到啦！" };

@@ -6,8 +6,8 @@
 //       每条鱼 ≤ 8 个 draw call（含描边）。材质按 toon 函数缓存在模块里，多条鱼共用。
 import * as THREE from "three";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildCatch, CATCH, swim, shine } from "./fish3d.js?v=15.1";
-import { FISH } from "./fishdata.js?v=15.1";
+import { buildCatch, CATCH, swim, shine } from "./fish3d.js?v=16";
+import { FISH } from "./fishdata.js?v=16";
 
 /* ================================================================ 小工具 */
 const TAU = Math.PI * 2;

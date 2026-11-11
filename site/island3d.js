@@ -60,35 +60,38 @@ function polyFrom(pts, closed = true, n = 200) {
   const curve = new THREE.CatmullRomCurve3(pts.map(([x, z]) => new THREE.Vector3(x, 0, z)), closed, "centripetal");
   return curve.getSpacedPoints(n).map((p) => [p.x, p.z]);
 }
-function segDist(px, pz, ax, az, bx, bz) {
+// 点到线段距离的平方（v16：不用 Math.hypot、也不在循环里开方，地形生成快好几倍）
+function segDist2(px, pz, ax, az, bx, bz) {
   const dx = bx - ax, dz = bz - az, L = dx * dx + dz * dz || 1;
-  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / L));
-  return Math.hypot(px - ax - dx * t, pz - az - dz * t);
+  let t = ((px - ax) * dx + (pz - az) * dz) / L;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  const ex = px - ax - dx * t, ez = pz - az - dz * t;
+  return ex * ex + ez * ez;
 }
 function makeSDF(poly) {
+  const n = poly.length, xs = Float64Array.from(poly, (p) => p[0]), zs = Float64Array.from(poly, (p) => p[1]);
   // 粗筛：包围盒外面直接用到包围盒的距离下界，省点算力
   return (x, z) => {
     let d = Infinity, inside = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [ax, az] = poly[j], [bx, bz] = poly[i];
-      const s = segDist(x, z, ax, az, bx, bz);
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const ax = xs[j], az = zs[j], bx = xs[i], bz = zs[i];
+      const s = segDist2(x, z, ax, az, bx, bz);
       if (s < d) d = s;
       if ((az > z) !== (bz > z) && x < ((bx - ax) * (z - az)) / (bz - az) + ax) inside = !inside;
     }
+    d = Math.sqrt(d);
     return inside ? -d : d;
   };
 }
 function makeLineDist(poly) {
+  const n = poly.length, xs = Float64Array.from(poly, (p) => p[0]), zs = Float64Array.from(poly, (p) => p[1]);
   return (x, z) => {
-    let d = Infinity, t = 0, best = 0, acc = 0;
-    for (let i = 1; i < poly.length; i++) {
-      const [ax, az] = poly[i - 1], [bx, bz] = poly[i];
-      const s = segDist(x, z, ax, az, bx, bz);
-      const len = Math.hypot(bx - ax, bz - az);
-      if (s < d) { d = s; best = acc; }
-      acc += len;
+    let d = Infinity;
+    for (let i = 1; i < n; i++) {
+      const s = segDist2(x, z, xs[i - 1], zs[i - 1], xs[i], zs[i]);
+      if (s < d) d = s;
     }
-    return d;
+    return Math.sqrt(d);
   };
 }
 
@@ -223,7 +226,15 @@ export function buildMainIsland({ material }) {
   mesh.receiveShadow = true;
 
   // 海岸半径：沿每个角度从外往里找第一个高于海面的点
+  // （v16）同一个角度会被问很多次（浪花、沙滩、事件），按 0.001 弧度缓存
+  const shoreMemo = new Map();
   function shoreR(a) {
+    const key = Math.round((((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) * 1000);
+    let v = shoreMemo.get(key);
+    if (v === undefined) { v = shoreScan(key / 1000); shoreMemo.set(key, v); }
+    return v;
+  }
+  function shoreScan(a) {
     const ca = Math.cos(a), sa = Math.sin(a);
     for (let r = 9; r > 0; r -= 0.05) if (landH(ca * r, sa * r) > SEA_Y) {
       let lo = r, hi = r + 0.05;

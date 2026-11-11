@@ -1,12 +1,12 @@
 // 小岛生活（v15）的 3D 一侧：孵出来的宠物在岛上溜达、来访的岛民站在码头边、出海的小船、突发事件、远方的小岛、小木屋室内。
 // 状态全部来自 life-ui.js 拉到的 /life（setState），这里只负责摆出来、动起来、被点到时派发 "nest:tap"。
 import * as THREE from "three";
-import { buildPet, buildVisitor, buildEgg, buildBoat, PET_LOOKS } from "./critters3d.js?v=15.1";
-import { createEvents, buildFarIsland, FAR_SPOTS } from "./events3d.js?v=15.1";
-import { buildFish, fishThumbs as renderThumbs } from "./fishgen3d.js?v=15.1";
-import { animateCatch } from "./fish3d.js?v=15.1";
-import { FISH } from "./fishdata.js?v=15.1";
-import { PETS_ON_ISLAND, GOODS } from "./lifedata.js?v=15.1";
+import { buildPet, buildVisitor, buildEgg, buildBoat, PET_LOOKS } from "./critters3d.js?v=16";
+import { createEvents, buildFarIsland, FAR_SPOTS } from "./events3d.js?v=16";
+import { buildFish, fishThumbs as renderThumbs } from "./fishgen3d.js?v=16";
+import { animateCatch } from "./fish3d.js?v=16";
+import { FISH } from "./fishdata.js?v=16";
+import { PETS_ON_ISLAND, GOODS } from "./lifedata.js?v=16";
 
 const V3 = () => new THREE.Vector3();
 const PET_S = 2.2, VIS_S = 1.7, BOAT_S = 2; // 模型是按 1 倍做的；角色实际约 1.0 高（小猫），宠物到它一半、岛民和它差不多
@@ -272,7 +272,7 @@ export function createLife3D(ctx) {
   }
   async function ensureInterior() {
     if (interior) return interior;
-    interiorP ||= import("./interior3d.js?v=15.1").then(({ buildInterior, INTERIOR_LABELS }) => {
+    interiorP ||= import("./interior3d.js?v=16").then(({ buildInterior, INTERIOR_LABELS }) => {
       interior = buildInterior(deps);
       labelText = INTERIOR_LABELS || {};
       syncInterior();
