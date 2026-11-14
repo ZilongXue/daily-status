@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Island events preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #cfe8f5; font: 13px system-ui, sans-serif; overflow: hidden; }
+  #c { display: block; width: 100%; height: 100%; touch-action: none; }
+  .bar { position: fixed; left: 6px; right: 6px; bottom: 6px; display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+  .bar b { align-self: center; color: #456; font-size: 11px; margin: 0 2px 0 6px; }
+  button { border: 1px solid #b9cfd8; background: #fff; border-radius: 8px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+  button.on { background: #ffe1ea; border-color: #f39ab4; }
+  #stat { position: fixed; top: 6px; left: 8px; font: 11px/1.35 ui-monospace, monospace; color: #fff; background: rgba(20,30,50,.62); padding: 5px 8px; border-radius: 6px; white-space: pre; pointer-events: none; }
+  #err { position: fixed; top: 6px; right: 8px; max-width: 50%; font: 11px monospace; color: #fff; background: #c0392b; padding: 4px 8px; border-radius: 6px; white-space: pre-wrap; display: none; }
+  body.shot .bar, body.shot #stat { display: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stat"></div>
+<div id="err"></div>
+<div class="bar" id="bar"></div>
+<script>
+  // 页面上直接显示报错（无头截图时也能看到）
+  addEventListener("error", (e) => { const b = document.getElementById("err"); b.style.display = "block"; b.textContent += (e.message || e) + "\n"; });
+  addEventListener("unhandledrejection", (e) => { const b = document.getElementById("err"); b.style.display = "block"; b.textContent += "promise: " + (e.reason && e.reason.message || e.reason) + "\n"; });
+</script>
+<script type="module">
+// 参数：?focus=whale|x,y,z（镜头对准某处）  ?ev=typhoon|parrot|meteor|lowtide|whale  ?sky=day|dawn|dusk|night  ?az=<度，0 = 默认镜头在 +z>  ?d=<镜头距离，默认 16；手机 21>
+//       ?rot（自动转）  ?far=0（不放远岛）  ?shot（隐藏按钮，截图用）  ?season=…（home3d 的季节）
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { createWorld, SEA_Y, DOCK } from "./world3d.js?v=16";
+import { glowSprite } from "./home3d.js?v=16";
+import { createEvents, buildFarIsland, FAR_SPOTS } from "./events3d.js?v=16";
+
+const params = new URLSearchParams(location.search);
+if (params.has("shot")) document.body.classList.add("shot");
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setClearColor(0x000000, 0);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 0.6, -0.7);
+controls.enablePan = false;
+controls.enableDamping = true;
+controls.minPolarAngle = controls.maxPolarAngle = 1.13;
+controls.autoRotate = params.has("rot");
+controls.autoRotateSpeed = 0.5;
+
+/* ------------------------------------------------ 和 scene3d.js 一样的 toon / outlined */
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.userData.outline = thickness;
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+
+/* ------------------------------------------------ 小岛（同 scene3d：world 组 + createWorld） */
+const world = new THREE.Group();
+scene.add(world);
+const tag = (obj, what) => { obj.traverse((o) => { o.userData.what = what; }); return obj; };
+const W = createWorld({ scene, world, toon, outlined, tag });
+
+// scene3d 里的规律树和小床（简化版，只为了看事件的东西有没有撞到它们）
+const props = new THREE.Group();
+{
+  const tree = new THREE.Group();
+  const trunk = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.19, 0.95, 9), toon(0x8a5a3b)), 0.03);
+  trunk.position.y = 0.47; tree.add(trunk);
+  for (const [x, y, z, r, c] of [[0, 1.35, 0, 0.62, 0x58b873], [0.42, 1.2, 0.18, 0.45, 0x6fcf86], [-0.4, 1.22, 0.1, 0.47, 0x4fae6a], [0.05, 1.25, -0.4, 0.48, 0x7fd88e], [0.1, 1.75, 0.05, 0.47, 0x58b873], [0.02, 2.08, 0, 0.3, 0x6fcf86]]) {
+    const m = outlined(new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), toon(c)), 0.035);
+    m.position.set(x, y, z); m.scale.y = 0.85; tree.add(m);
+  }
+  tree.position.set(1.95, 0, -1.25);
+  const bed = outlined(new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.5, 1.15), toon(0xd39a6a)), 0.035);
+  bed.position.set(-1.55, 0.25, -0.85); bed.rotation.y = 0.35;
+  props.add(tree, bed);
+}
+world.add(props);
+
+/* ------------------------------------------------ 灯光（同 scene3d 的 SKY 表） */
+const hemi = new THREE.HemisphereLight(0xdff3ff, 0x6f8f5a, 1.6);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.6);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+const SKY = {
+  dawn: { hemi: [0xffd3c4, 0x7d8a8a, 1.15], sun: [0xffb486, 2.35], fill: 0.4 },
+  day: { hemi: [0xd4eaff, 0x8a9a7a, 1.2], sun: [0xfff1dc, 2.75], fill: 0.28 },
+  dusk: { hemi: [0xffb8a6, 0x5e6478, 1.0], sun: [0xff9466, 2.1], fill: 0.45 },
+  night: { hemi: [0x5f6cc4, 0x1d2742, 0.85], sun: [0xa3b6ff, 0.8], fill: 0.5 },
+};
+let skyKind = params.get("sky") || "day";
+const fogBase = new THREE.Color(), STORM = new THREE.Color(0x5d6878);
+function applySky(k) {
+  skyKind = SKY[k] ? k : "day";
+  const s = SKY[skyKind];
+  W.setSky(skyKind);
+  hemi.color.setHex(s.hemi[0]); hemi.groundColor.setHex(s.hemi[1]);
+  sun.color.setHex(s.sun[0]);
+  fill.intensity = s.fill;
+  fogBase.copy(scene.fog.color);
+  document.querySelectorAll("[data-sky]").forEach((b) => b.classList.toggle("on", b.dataset.sky === skyKind));
+}
+// 集成示例：台风时按 events.skyDim 压暗灯光和雾（scene3d 里应该这样接）
+function applyDim(dim) {
+  const s = SKY[skyKind];
+  hemi.intensity = s.hemi[2] * (1 - 0.4 * dim);
+  sun.intensity = s.sun[1] * (1 - 0.65 * dim);
+  scene.fog.color.copy(fogBase).lerp(STORM, dim * (skyKind === "night" ? 0.3 : 0.7));
+}
+
+/* ------------------------------------------------ 事件 + 远岛 */
+const events = createEvents({ scene, world, toon, outlined, heightAt: W.heightAt, camera, SEA_Y, DOCK });
+const farIslands = [];
+if (params.get("far") !== "0") {
+  for (const kind of ["sakura", "snow", "volcano"]) {
+    const f = buildFarIsland(kind, { toon, outlined });
+    const p = FAR_SPOTS[kind];
+    f.root.position.set(p.x, 0, p.z);
+    f.root.rotation.y = p.rotY || 0;
+    world.add(f.root);
+    farIslands.push(f);
+  }
+}
+
+/* ------------------------------------------------ 相机 */
+let dist = +params.get("d") || 16;
+function setAz(deg) {
+  const th = THREE.MathUtils.degToRad(deg), ph = 1.13;
+  camera.position.set(Math.sin(ph) * Math.sin(th), Math.cos(ph), Math.sin(ph) * Math.cos(th)).multiplyScalar(dist).add(controls.target);
+  controls.update();
+}
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+setAz(+params.get("az") || 0);
+
+/* ------------------------------------------------ 点击：pick → 默认反馈 */
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let lastPick = "—", down = null;
+function tapAt(x, y) {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((x - r.left) / r.width) * 2 - 1, -((y - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = events.pick(ray);
+  lastPick = hit ? JSON.stringify(hit) : "null";
+  if (!hit) return hit;
+  if (hit.kind === "typhoon") events.setBraced(hit.index, !hit.braced);
+  else if (hit.kind === "parrot" || hit.kind === "whale") events.hit();
+  else if (hit.kind === "meteor" || hit.kind === "lowtide") events.collect(hit.index);
+  return hit;
+}
+canvas.addEventListener("pointerdown", (e) => { down = [e.clientX, e.clientY]; });
+canvas.addEventListener("pointerup", (e) => {
+  if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 8) tapAt(e.clientX, e.clientY);
+  down = null;
+});
+
+/* ------------------------------------------------ 按钮 */
+const bar = document.getElementById("bar");
+const add = (label, fn, data) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; if (data) Object.assign(b.dataset, data); bar.appendChild(b); return b; };
+const sep = (t) => { const s = document.createElement("b"); s.textContent = t; bar.appendChild(s); };
+sep("事件");
+for (const k of ["typhoon", "parrot", "meteor", "lowtide", "whale"]) add(k, () => startEv(k), { ev: k });
+add("stop", () => { events.stop(); syncBtns(); });
+sep("天");
+for (const k of ["dawn", "day", "dusk", "night"]) add(k, () => applySky(k), { sky: k });
+sep("台风");
+for (const i of [0, 1, 2]) add(`brace ${i}`, () => events.setBraced(i, true));
+add("unbrace", () => [0, 1, 2].forEach((i) => events.setBraced(i, false)));
+add("强度 .4", () => events.setIntensity(0.4));
+add("强度 1", () => events.setIntensity(1));
+sep("鹦鹉");
+add("叼🧦", () => events.setCarry("🧦"));
+add("叼🍑", () => events.setCarry("🍑"));
+add("放下", () => events.setCarry(null));
+add("hit", () => events.hit());
+add("leave", () => events.leave().then(syncBtns));
+sep("流星 / 退潮");
+add("碎片×6", () => events.spawnFragments(6));
+add("贝壳×6", () => events.spawnShells(6));
+add("collect next", () => { const h = events.targets().find((x) => x.target === "fragment" || x.target === "shell"); if (h) events.collect(h.index); });
+add("rotate", () => { controls.autoRotate = !controls.autoRotate; });
+function startEv(k) {
+  events.start(k);
+  if (k === "meteor") events.spawnFragments(6, 7);
+  if (k === "lowtide") events.spawnShells(6, 3);
+  syncBtns();
+}
+function syncBtns() { document.querySelectorAll("[data-ev]").forEach((b) => b.classList.toggle("on", b.dataset.ev === events.active())); }
+
+/* ------------------------------------------------ 绘制次数：只画事件的东西数一次 */
+const stat = document.getElementById("stat");
+let evCalls = 0, frame = 0;
+function measure() {
+  const hidden = [W.env, props, ...farIslands.map((f) => f.root)];
+  hidden.forEach((o) => { o.visible = false; });
+  renderer.render(scene, camera);
+  evCalls = renderer.info.render.calls;
+  hidden.forEach((o) => { o.visible = true; });
+}
+function farCalls(i) {
+  const hidden = [W.env, props, ...farIslands.map((f) => f.root)];
+  hidden.forEach((o) => { o.visible = false; });
+  const was = events.active(); if (was) events.stop();
+  farIslands[i].root.visible = true;
+  renderer.render(scene, camera);
+  const n = renderer.info.render.calls;
+  hidden.forEach((o) => { o.visible = true; });
+  if (was) events.start(was);
+  return n;
+}
+
+const clock = new THREE.Clock();
+let lastT = 0;
+function loop() {
+  const t = clock.getElapsedTime(), dt = Math.min(0.1, t - lastT);
+  lastT = t;
+  W.update(t, dt);
+  events.update(t, dt);
+  for (const f of farIslands) f.update(t);
+  applyDim(events.skyDim);
+  controls.update();
+  if (++frame % 20 === 0) measure();
+  renderer.render(scene, camera);
+  const i = renderer.info.render;
+  stat.textContent = `event: ${events.active() || "—"}  skyDim ${events.skyDim.toFixed(2)}\ndraws: total ${i.calls}  event-only ${evCalls}  tris ${(i.triangles / 1000).toFixed(0)}k\npick: ${lastPick}`;
+  requestAnimationFrame(loop);
+}
+applySky(skyKind);
+if (params.get("ev")) startEv(params.get("ev"));
+if (params.get("focus")) {
+  const f = params.get("focus");
+  const p = f === "whale" ? events.focusPoint() : new THREE.Vector3(...f.split(",").map(Number));
+  if (p) { controls.target.copy(p); setAz(+params.get("az") || 0); }
+}
+requestAnimationFrame(loop);
+
+// 给无头测试用
+window.P = { events, W, scene, camera, renderer, THREE, world, setAz, applySky, tapAt, measure, farCalls, startEv, controls,
+  setTarget(x, y, z, az) { controls.target.set(x, y, z); setAz(az == null ? 0 : az); },
+  get evCalls() { return evCalls; },
+  setDist(d) { dist = d; },
+  screenOf(v) { const p = v.clone(); world.localToWorld(p); p.project(camera); return { x: (p.x + 1) / 2 * innerWidth, y: (1 - p.y) / 2 * innerHeight }; } };
+</script>
+</body>
+</html>

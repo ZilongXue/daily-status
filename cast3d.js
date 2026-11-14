@@ -1,0 +1,775 @@
+// 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
+// scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
+import * as THREE from "three";
+import { buildFish } from "./fishgen3d.js?v=16";
+import { FISH } from "./fishdata.js?v=16";
+import { POOL } from "./island3d.js?v=16";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=16";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=16";
+
+const UP = new THREE.Vector3(0, 1, 0);
+const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
+export const KITTEN_SCALE = 0.68;
+const PONY_SCALE = 0.66;
+const GAP = 0.64;   // 两只角色互动时的距离跟着角色一起缩
+const SPEED = 0.72; // 走路速度也慢一点（腿短了）
+
+export function createCast(ctx) {
+  const { world, toon, outlined, tag, W, DOCK, SEA_Y, dino, textSprite, screenOf } = ctx;
+  const setFocus = ctx.setFocus || (() => {}), clearFocus = ctx.clearFocus || (() => {});
+  const lerp = (a, b, k) => a + (b - a) * k;
+  const lerpAngle = (a, b, k) => { let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI; if (d < -Math.PI) d += Math.PI * 2; return a + d * k; };
+  let T = 0; // 当前时间（秒），update 里更新
+
+  /* ------------------------------------------------------------ 小猫 + 小马 */
+  const kitten = buildKitten({ toon, outlined });
+  kitten.root.scale.setScalar(KITTEN_SCALE);
+  const pony = buildPony({ toon, outlined });
+  pony.root.scale.setScalar(PONY_SCALE);
+  tag(kitten.root, "her");
+  tag(pony.root, "pony");
+  world.add(kitten.root, pony.root);
+  const HER_HOME = new THREE.Vector3(-0.45, 0, 1.6);
+  const PONY_HOME = new THREE.Vector3(-1.8, 0, 0.5);
+  kitten.root.position.copy(HER_HOME);
+  pony.root.position.copy(PONY_HOME);
+
+  // 演员：位置 / 目标 / 速度 / 朝向，move() 返回一个走到了才 resolve 的 promise
+  const mkActor = (obj, speed) => ({ obj, target: obj.root.position.clone(), speed, face: null, walking: false, arrive: null });
+  const her = mkActor(kitten, 1.7 * SPEED), horse = mkActor(pony, 1.3 * SPEED);
+  function move(a, p, speed) {
+    a.target.copy(p).setY(0);
+    a.speedNow = speed ? speed * SPEED : a.speed;
+    return new Promise((res) => { a.arrive = res; });
+  }
+  const wait = (s) => new Promise((res) => waits.push({ at: T + s, res }));
+  const waits = [];
+
+  // 心情气泡（emoji 精灵），挂在小猫头顶
+  const MOOD_EMOJI = { happy: "😊", tired: "😮‍💨", miss: "🥺", angry: "😤", sleepy: "😪" };
+  const moodSprite = textSprite("😊", "#000", 96);
+  moodSprite.scale.setScalar(0.3);
+  moodSprite.visible = false;
+  world.add(moodSprite);
+  const zz = [0, 1, 2].map(() => { const s = textSprite("Z", "#6f7ad6"); s.visible = false; world.add(s); return s; });
+  const prop = textSprite("🩴", "#000", 96); // 手上拿的东西（武器 / 食物 / 花）
+  prop.scale.setScalar(0.27); prop.visible = false;
+  world.add(prop);
+  const hearts = Array.from({ length: 8 }, () => { const s = textSprite("♥", "#ff6b8b"); s.visible = false; s.userData.t0 = -10; world.add(s); return s; });
+  const stars = Array.from({ length: 10 }, () => { const s = textSprite("✦", "#ffc93c"); s.visible = false; s.userData.t0 = -10; world.add(s); return s; });
+  function burst(list, at, n = 5, spread = 0.6) {
+    let k = 0;
+    for (const s of list) {
+      if (T - s.userData.t0 < 1.3) continue;
+      s.userData = { t0: T + k * 0.08, at: at.clone(), dx: (Math.random() - 0.5) * spread, dz: (Math.random() - 0.5) * spread };
+      if (++k >= n) break;
+    }
+  }
+  function setProp(emoji) {
+    if (!emoji) { prop.visible = false; return; }
+    const c = prop.material.map.image, g = c.getContext("2d");
+    g.clearRect(0, 0, c.width, c.height);
+    g.font = `${c.width * 0.8}px "Apple Color Emoji","Noto Color Emoji",sans-serif`;
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(emoji, c.width / 2, c.height / 2);
+    prop.material.map.needsUpdate = true;
+    prop.visible = true;
+  }
+  function setEmoji(sprite, emoji) {
+    const c = sprite.material.map.image, g = c.getContext("2d");
+    g.clearRect(0, 0, c.width, c.height);
+    g.font = `${c.width * 0.8}px "Apple Color Emoji","Noto Color Emoji",sans-serif`;
+    g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(emoji, c.width / 2, c.height / 2);
+    sprite.material.map.needsUpdate = true;
+  }
+
+  /* ------------------------------------------------------------ 状态（social.js 喂进来） */
+  const S = {
+    online: false,     // 她在线（最近 3 分钟内打开过页面，或者她自己就是看的人）
+    asleep: false,     // 她点了"我睡啦"还没点"我醒啦"
+    mood: null,        // 最近 12 小时的心情
+    riding: false,     // 骑在小马上
+    busy: false,       // 正在演一段互动（这时不闲逛）
+    pose: "stand",     // stand | sit | curl
+  };
+  let wanderAt = 3, manualUntil = 0;
+  // 她自己点草地（或者实时同步过来）让小猫走过去；之后 20 秒内不自己乱逛
+  function walkHer(p) {
+    if (busyFishing("her")) return;
+    if (S.busy) return;
+    if (S.riding) seatKitten(false);
+    her.face = null;
+    her.target.copy(p).setY(0);
+    her.speedNow = her.speed * 1.2;
+    manualUntil = T + 20;
+  }
+
+  function seatKitten(on) {
+    S.riding = on;
+    if (on) {
+      pony.saddle.add(kitten.root);
+      kitten.root.position.set(0, 0, 0);
+      kitten.root.rotation.set(0, 0, 0);
+      kitten.root.scale.setScalar(1); // saddle 自带 0.75 的缩放
+      setRiding(kitten, true);
+    } else {
+      const p = pony.saddle.getWorldPosition(new THREE.Vector3());
+      world.worldToLocal(p);
+      setRiding(kitten, false);
+      world.add(kitten.root);
+      kitten.root.position.set(p.x, 0, p.z).add(new THREE.Vector3(0.4, 0, 0.2));
+      kitten.root.scale.setScalar(KITTEN_SCALE);
+      her.target.copy(kitten.root.position);
+    }
+  }
+
+  /* ------------------------------------------------------------ 互动编排 */
+  // 走到某个演员面前：站在对方朝向我们这一侧、离开 gap 的地方
+  const nearPoint = (from, to, gap) => {
+    const d = new THREE.Vector3().subVectors(from, to).setY(0);
+    if (d.lengthSq() < 1e-4) d.set(0, 0, 1);
+    return to.clone().add(d.setLength(gap));
+  };
+  const dinoPos = () => dino.root().position.clone().setY(0);
+  const herPos = () => (S.riding ? world.worldToLocal(pony.saddle.getWorldPosition(new THREE.Vector3())) : kitten.root.position.clone()).setY(0);
+  let queue = Promise.resolve();
+  function enqueue(fn) {
+    queue = queue.then(async () => {
+      S.busy = true;
+      setFocus(() => herPos().add(dinoPos()).multiplyScalar(0.5).setY(0.4), 5.2);
+      try { await fn(); } catch (e) { console.warn(e); }
+      clearFocus();
+      S.busy = false; wanderAt = T + 4;
+      dino.face(null); her.face = null; // 演完各自转回镜头
+    });
+    return queue;
+  }
+  async function herGoToDino(gap = 1.05) {
+    if (S.riding) { seatKitten(false); await wait(0.25); }
+    S.pose = "stand";
+    const p = nearPoint(kitten.root.position, dinoPos(), gap * GAP);
+    her.face = null;
+    await move(her, p, 2.4);
+    her.face = () => dinoPos();
+    dino.face(() => kitten.root.position);
+  }
+  async function dinoGoToHer(gap = 1.15) {
+    const p = nearPoint(dinoPos(), herPos(), gap * GAP);
+    await dino.go(p);
+    dino.face(() => herPos());
+    her.face = () => dinoPos();
+  }
+  const anim = { kind: "", t0: -10, dur: 0 }; // 小猫自己的小动作
+  const kAnim = (kind, dur) => { anim.kind = kind; anim.t0 = T; anim.dur = dur; return wait(dur); };
+  const headOf = (o) => o.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.28, 0));
+
+  const PLAYS = {
+    // 她 → 他
+    async hit(item) {
+      await herGoToDino(0.95);
+      setProp(item || "👊");
+      for (let i = 0; i < 3; i++) { await kAnim("swing", 0.32); dino.react("hit"); burst(stars, world.worldToLocal(headOf(dino.parts())), 3, 0.5); }
+      setProp(null);
+      await wait(0.4);
+    },
+    async feed(item) {
+      setProp(item || "🍙");
+      await herGoToDino(0.95);
+      await kAnim("give", 0.5);
+      setProp(null);
+      dino.react("eat");
+      await wait(1.4);
+    },
+    async hug() {
+      await herGoToDino(0.62);
+      dino.react("love");
+      await kAnim("hug", 1.8);
+      burst(hearts, world.worldToLocal(headOf(dino.parts())), 6, 0.8);
+      await wait(0.4);
+    },
+    async pat() {
+      await herGoToDino(0.75);
+      await kAnim("pat", 1.4);
+      dino.react("blush");
+      burst(hearts, world.worldToLocal(headOf(dino.parts())), 3);
+      await wait(0.4);
+    },
+    async kiss() {
+      await herGoToDino(0.6);
+      await kAnim("kiss", 0.9);
+      dino.react("love");
+      burst(hearts, world.worldToLocal(headOf(dino.parts())), 7, 0.9);
+      await wait(0.8);
+    },
+    async highfive() {
+      await herGoToDino(0.85);
+      dino.react("wave");
+      await kAnim("highfive", 0.8);
+      burst(stars, world.worldToLocal(headOf(kitten)).add(new THREE.Vector3(0, -0.2, 0)), 6, 0.7);
+      await wait(0.6);
+    },
+    async poke() {
+      await herGoToDino(0.85);
+      await kAnim("poke", 0.9);
+      dino.react(dino.sleeping() ? "stir" : "jump");
+      await wait(0.5);
+    },
+    async ride() { // 骑小马绕岛一圈
+      if (!S.riding) {
+        const sp = nearPoint(kitten.root.position, pony.root.position.clone().setY(0), 0.55 * GAP);
+        await move(her, sp, 2.2);
+        await kAnim("hop", 0.4);
+        seatKitten(true);
+      }
+      const a0 = Math.atan2(pony.root.position.z, pony.root.position.x);
+      for (let i = 1; i <= 12; i++) {
+        const a = a0 + (i / 12) * Math.PI * 2;
+        await move(horse, new THREE.Vector3(Math.cos(a) * 2.2, 0, Math.sin(a) * 2.2), 2.0);
+      }
+      await move(horse, PONY_HOME, 1.6);
+      burst(hearts, world.worldToLocal(headOf(kitten)), 3);
+      await wait(0.6);
+      seatKitten(false);
+    },
+    // 他 → 她
+    async me_pat() {
+      await dinoGoToHer(0.95);
+      dino.react("wave");
+      await kAnim("blush", 1.4);
+      burst(hearts, world.worldToLocal(headOf(kitten)), 4);
+      await wait(0.4);
+    },
+    async me_hug() {
+      await dinoGoToHer(0.7);
+      dino.react("love");
+      await kAnim("hug", 1.8);
+      burst(hearts, world.worldToLocal(headOf(kitten)), 6, 0.8);
+    },
+    async me_kiss() {
+      await dinoGoToHer(0.65);
+      dino.react("love");
+      await kAnim("blush", 1.2);
+      burst(hearts, world.worldToLocal(headOf(kitten)), 7, 0.9);
+    },
+    async me_highfive() {
+      await dinoGoToHer(0.9);
+      dino.react("wave");
+      await kAnim("highfive", 0.8);
+      burst(stars, world.worldToLocal(headOf(kitten)), 6, 0.7);
+    },
+    async me_poke() {
+      await dinoGoToHer(0.9);
+      dino.react("jump");
+      await kAnim(S.asleep ? "stir" : "startle", 0.9);
+    },
+    async me_ride() { await PLAYS.ride(); },
+    async flower() { // 他送花：恐龙叼着花走过去
+      await dinoGoToHer(1.0);
+      await kAnim("blush", 1.2);
+      burst(hearts, world.worldToLocal(headOf(kitten)), 5);
+    },
+    async tuck() { // 她给他盖被子：小猫跑到床边拍一拍
+      await herGoToDino(0.8);
+      await kAnim("pat", 1.3);
+      dino.react(dino.sleeping() ? "stir" : "blush");
+      burst(hearts, world.worldToLocal(headOf(dino.parts())), 5, 0.7);
+      await wait(0.5);
+    },
+    async bonk() { // 猜拳她赢了：拿小锤子敲恐龙
+      await herGoToDino(0.95);
+      setProp("🔨");
+      for (let i = 0; i < 2; i++) { await kAnim("swing", 0.32); dino.react("hit"); burst(stars, world.worldToLocal(headOf(dino.parts())), 3, 0.5); }
+      setProp(null);
+      await kAnim("hop", 0.6);
+    },
+    async me_bonk() { // 猜拳他赢了：恐龙走过去"咚"一下小猫
+      await dinoGoToHer(1.0);
+      for (let i = 0; i < 2; i++) {
+        dino.react("jump");
+        await wait(0.45);
+        await kAnim("startle", 0.4);
+        burst(stars, world.worldToLocal(headOf(kitten)), 3, 0.5);
+      }
+      await kAnim("blush", 0.8);
+    },
+    async me_tuck() { // 他给她盖被子：恐龙走过去摸摸头
+      await dinoGoToHer(0.9);
+      dino.react("love");
+      await kAnim("blush", 1.3);
+      burst(hearts, world.worldToLocal(headOf(kitten)), 5, 0.7);
+    },
+    async sorry() { // 他认错：恐龙走过去鞠躬
+      await dinoGoToHer(1.1);
+      dino.react("bow");
+      await wait(1.9);
+    },
+  };
+  function play(kind, who, item) {
+    const key = who === "me" && PLAYS["me_" + kind] ? "me_" + kind : kind;
+    const fn = PLAYS[key];
+    if (!fn) return Promise.resolve();
+    return enqueue(() => fn(item));
+  }
+
+  /* ------------------------------------------------------------ 钓鱼（两个"钓位"：恐龙一个、小猫一个，钓鱼大赛时可以一起钓） */
+  const ROD_REST = 1.0;
+  const PERP = new THREE.Vector3(DOCK.dir.z, 0, -DOCK.dir.x); // 码头的横向
+  function makeSlot(actor, side) {
+    const rod = buildRod({ toon, outlined });
+    const bob = buildBobber({ toon, outlined });
+    rod.root.visible = false;
+    bob.root.visible = false;
+    world.add(bob.root);
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 12 }, () => new THREE.Vector3()));
+    const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85 }));
+    line.visible = false;
+    line.frustumCulled = false;
+    world.add(line);
+    const glow = new THREE.PointLight(0xffffff, 0, 3.5, 1.5);
+    world.add(glow);
+    const beamMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 3.2, 20, 1, true), beamMat);
+    beam.visible = false;
+    world.add(beam);
+    return {
+      actor, rod, bob, line, lineGeo, glow, beam, beamMat,
+      state: "idle", caught: null, pull: null, atDock: false, local: false,
+      // 码头只有 0.62 宽：两个人一前一后站（恐龙在最前面，小猫往回半步），各自偏一点
+      stand: DOCK.tip.clone().addScaledVector(PERP, side * 0.17).addScaledVector(DOCK.dir, side > 0 ? 0 : -0.6),
+      bobFrom: new THREE.Vector3(), bobTo: DOCK.bobber.clone().addScaledVector(PERP, side * 0.95),
+    };
+  }
+  const SLOTS = { me: makeSlot("me", 1), her: makeSlot("her", -1) };
+  const slotList = Object.values(SLOTS);
+  const busyFishing = (actor) => SLOTS[actor].state !== "idle";
+
+  function holdRod(sl) {
+    const who = sl.actor;
+    const parts = who === "her" ? kitten : dino.parts();
+    const arm = parts.arms[1];
+    arm.add(sl.rod.root);
+    sl.rod.root.position.set(0.02, -0.18, 0.1);
+    sl.rod.root.rotation.set(ROD_REST, 0, 0);
+    sl.rod.root.scale.setScalar(1 / (who === "her" ? KITTEN_SCALE : dino.scale()) * 0.95);
+    sl.rod.root.visible = true;
+  }
+  function dropRod(sl) { sl.rod.root.removeFromParent(); sl.rod.root.visible = false; }
+
+  // 普通钓鱼：request() 一开始就发，返回最终结果 { catch, rarity, ... }。
+  // 比赛（opts.derby）：浮漂落水时才调 request()，它返回 { bite: 毫秒, reel(react|null) → Promise<结果> }；
+  //   咬钩后等玩家点"拉"，把反应时间交给 reel()，服务器这时才抽鱼。结果里 catch 为 null 表示鱼跑了。
+  //   opts.stay：钓完留在码头（比赛连着钓）。opts.local：是不是本机玩家自己在钓（决定要不要冒"快拉"按钮）。
+  async function fish(whoReal, request, opts = {}) {
+    // 他在床上睡着时，换小猫替他去钓（比赛时不换）
+    const who = whoReal === "me" && dino.sleeping() && !opts.derby ? "her" : whoReal;
+    const sl = SLOTS[who];
+    if (sl.state !== "idle") return null;
+    sl.state = "walking";
+    sl.local = opts.local !== false;
+    sl.session = !!opts.session; // 自己点的"连续钓"：钓完站在原地等下一竿
+    if (who === "her" && S.riding) seatKitten(false);
+    const go = (p) => (who === "her" ? move(her, p, 2.4) : dino.go(p));
+    // 瀑布下的水潭（v15）：站在水潭靠草地这一边，浮漂落在水潭中间；钓完直接走回家
+    const pool = opts.spot === "pool" && !opts.derby;
+    if (pool && !sl.dockStand) {
+      sl.dockStand = sl.stand; sl.dockBob = sl.bobTo;
+      const toC = new THREE.Vector3(-POOL.x, 0, -POOL.z).normalize();
+      const side = new THREE.Vector3(-toC.z, 0, toC.x).multiplyScalar(who === "her" ? -0.22 : 0.22);
+      sl.stand = new THREE.Vector3(POOL.x, 0, POOL.z).addScaledVector(toC, POOL.r + 0.42).add(side);
+      sl.stand.y = Math.max(0, W.heightAt(sl.stand.x, sl.stand.z));
+      sl.bobTo = new THREE.Vector3(POOL.x, -0.1, POOL.z).addScaledVector(toC, 0.08).add(side);
+      sl.atPool = true;
+    }
+    const faceSea = () => (sl.atPool ? sl.bobTo.clone().setY(sl.stand.y) : sl.stand.clone().add(DOCK.dir));
+    if (who === "her") her.face = null; else dino.face(null);
+    const res = opts.derby ? null : request();
+    if (!sl.atDock) { if (!sl.atPool) await go(DOCK.base); await go(sl.stand); sl.atDock = true; }
+    if (who === "her") her.face = faceSea; else dino.face(faceSea);
+    holdRod(sl);
+    await wait(0.3);
+    // 甩竿
+    sl.state = "casting";
+    sl.castT = T;
+    sl.rod.tip.getWorldPosition(sl.bobFrom); world.worldToLocal(sl.bobFrom);
+    sl.bob.root.visible = true; sl.line.visible = true;
+    await wait(0.9);
+    W.splash(sl.bobTo, 0.6);
+    sl.state = "waiting";
+    let result, pulled = false;
+    if (opts.derby) {
+      let c;
+      try { c = await request(); } catch (e) { c = { error: e.message || "失败" }; }
+      if (c.error) { await wait(0.5); await endFishing(sl, opts.stay); return c; }
+      await wait(c.bite / 1000);
+      sl.state = "bite";
+      sl.biteT = T;
+      W.splash(sl.bobTo, 1);
+      const t0 = performance.now();
+      if (sl.local) dispatchEvent(new CustomEvent("nest:fish-bite", { detail: { who, derby: true, ...screenOf(world.localToWorld(sl.bobTo.clone())) } }));
+      pulled = await Promise.race([new Promise((r) => { sl.pull = () => r(true); }), wait(1.6).then(() => false)]);
+      sl.pull = null;
+      const react = pulled ? Math.round(performance.now() - t0) : null;
+      try { result = await c.reel(react); } catch (e) { result = { error: e.message || "失败" }; }
+    } else {
+      try { result = await res; } catch (e) { result = { error: e.message || "失败" }; }
+      if (result.error) { await wait(0.8); await endFishing(sl, opts.stay); return result; }
+      await wait(opts.biteIn != null ? opts.biteIn : 1.4 + Math.random() * 2.2);
+      sl.state = "bite";
+      sl.biteT = T;
+      W.splash(sl.bobTo, 1);
+      if (sl.local) dispatchEvent(new CustomEvent("nest:fish-bite", { detail: { who, ...screenOf(world.localToWorld(sl.bobTo.clone())) } }));
+      // 等"拉"：最多 2.2 秒，不拉也会自己拉上来（差点跑了）
+      pulled = await Promise.race([new Promise((r) => { sl.pull = () => r(true); }), wait(opts.local === false ? 0.4 : 2.2).then(() => false)]);
+      sl.pull = null;
+    }
+    if (result.error || !result.catch) { // 鱼跑了 / 出错
+      W.splash(sl.bobTo, 1.4);
+      sl.state = "waiting";
+      dispatchEvent(new CustomEvent("nest:fish-miss", { detail: { ...result, who: whoReal, derby: !!opts.derby, local: sl.local, ...screenOf(world.localToWorld(sl.bobTo.clone())) } }));
+      await wait(0.6);
+      await endFishing(sl, opts.stay);
+      return result;
+    }
+    sl.state = "reeling";
+    sl.reelT = T;
+    const it = buildFish(result.catch, { toon, outlined });
+    sl.caught = it;
+    it.root.position.copy(sl.bobTo);
+    world.add(it.root);
+    const col = RARITY_COL[result.rarity] || 0xffffff;
+    sl.glow.color.setHex(col); sl.beamMat.color.setHex(col);
+    W.splash(sl.bobTo, 1.6);
+    sl.bob.root.visible = false;
+    await wait(1.0);
+    sl.state = "reveal";
+    sl.revealT = T;
+    if (result.rarity === "epic" || result.rarity === "legend") burst(stars, it.root.position.clone(), 10, 1.4);
+    const at = screenOf(world.localToWorld(it.root.position.clone()));
+    dispatchEvent(new CustomEvent("nest:fish-reveal", { detail: { ...result, quick: result.quick ?? pulled, derby: !!opts.derby, local: sl.local, ...at } }));
+    await wait(opts.derby ? 1.9 : result.rarity === "legend" ? 3.4 : 2.6);
+    // 鱼放回海里（以后在浅水区游）；其他东西"噗"一下收进背包
+    sl.state = "release";
+    sl.relT = T;
+    await wait(0.9);
+    world.remove(it.root);
+    sl.caught = null;
+    addSwimmer(result.catch);
+    await endFishing(sl, opts.stay);
+    return result;
+  }
+  async function endFishing(sl, stay) {
+    sl.line.visible = false; sl.bob.root.visible = false;
+    sl.glow.intensity = 0; sl.beam.visible = false;
+    if (stay) { sl.state = "idle"; return; } // 比赛：竿还拿着，人留在码头
+    dropRod(sl);
+    sl.state = "walking";
+    sl.atDock = false;
+    sl.session = false;
+    const who = sl.actor;
+    const pool = sl.atPool;
+    if (who === "her") { her.face = null; if (!pool) await move(her, DOCK.base, 2.2); await move(her, HER_HOME, 1.8); }
+    else { dino.face(null); if (!pool) await dino.go(DOCK.base); await dino.go(dino.home()); }
+    if (pool) { sl.stand = sl.dockStand; sl.bobTo = sl.dockBob; sl.dockStand = sl.dockBob = null; sl.atPool = false; }
+    sl.state = "idle";
+  }
+  // 比赛结束 / 不钓了：从码头走回家
+  async function leaveDock(actor) {
+    const sl = SLOTS[actor];
+    if (!sl.atDock || sl.state !== "idle") return;
+    sl.state = "walking";
+    sl.atDock = false;
+    await endFishing(sl, false);
+  }
+  // 连续钓：本机玩家现在站在哪个钓点（"sea" 码头 / "pool" 水潭 / null）、是不是正忙着、收竿回家
+  const sessionSlots = () => slotList.filter((sl) => sl.session && sl.local && sl.atDock);
+  function localSpot() { const sl = sessionSlots()[0]; return sl ? (sl.atPool ? "pool" : "sea") : null; }
+  function localBusy() { return slotList.some((sl) => sl.local && sl.state !== "idle"); }
+  function leaveLocal() { return Promise.all(sessionSlots().map((sl) => leaveDock(sl.actor))); }
+  // 镜头对准哪：有人在水潭钓 → 水潭；码头上有人 → 码头
+  function fishFocus() {
+    const on = slotList.filter((sl) => sl.state !== "idle" || sl.atDock);
+    if (!on.length) return null;
+    return on.every((sl) => sl.atPool) ? "pool" : "dock";
+  }
+  function pull() { for (const sl of slotList) if (sl.pull && sl.local) { sl.pull(); return true; } return false; }
+
+  function updateSlot(sl, t, cameraLocal) {
+    if (sl.state === "idle" || sl.state === "walking") return;
+    const { rod, bob, line, lineGeo, glow, beam, beamMat, bobFrom, bobTo } = sl;
+    const tip = rod.tip.getWorldPosition(new THREE.Vector3()); world.worldToLocal(tip);
+    const hh = world.worldToLocal(headOf(sl.actor === "her" ? kitten : dino.parts()));
+    if (sl.state === "casting") {
+      const k = Math.min(1, (t - sl.castT) / 0.9);
+      rod.root.rotation.x = ROD_REST - Math.sin(k * Math.PI) * 1.4;
+      bob.root.position.lerpVectors(bobFrom, bobTo, k);
+      bob.root.position.y = lerp(bobFrom.y, SEA_Y, k) + Math.sin(k * Math.PI) * 1.4;
+    } else if (sl.state === "waiting") { bob.root.position.copy(bobTo); bobberIdle(bob, t); rod.root.rotation.x = ROD_REST + Math.sin(t * 1.3) * 0.03; }
+    else if (sl.state === "bite") { bob.root.position.copy(bobTo); bobberBite(bob, t - sl.biteT); rod.root.rotation.x = ROD_REST + 0.15 + Math.sin(t * 25) * 0.08; }
+    else if (sl.state === "reeling" && sl.caught) {
+      const k = Math.min(1, (t - sl.reelT) / 1.0);
+      rod.root.rotation.x = ROD_REST - Math.sin(k * Math.PI * 0.5) * 0.9;
+      const dst = hh.clone().add(new THREE.Vector3(0, 0.9, 0)).lerp(sl.stand.clone().add(DOCK.dir.clone().multiplyScalar(0.6)).setY(1.6), 0.4);
+      sl.caught.root.position.lerpVectors(bobTo, dst, k * k * (3 - 2 * k));
+      sl.caught.root.position.y += Math.sin(k * Math.PI) * 1.2;
+      sl.caught.root.rotation.y = t * 6;
+      swim(sl.caught, t, 3);
+      glow.position.copy(sl.caught.root.position); glow.intensity = 3 * k;
+    } else if ((sl.state === "reveal" || sl.state === "release") && sl.caught) {
+      const c = sl.caught.root;
+      if (sl.state === "reveal") {
+        c.position.y += Math.sin(t * 2.5) * 0.002;
+        c.rotation.y = lerpAngle(c.rotation.y % (Math.PI * 2), Math.atan2(cameraLocal.x - c.position.x, cameraLocal.z - c.position.z), 0.08); // 侧面朝镜头
+        const k = Math.min(1, (t - sl.revealT) / 0.6);
+        c.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.4 + 0.3 * k);
+        if (sl.caught.openLid) sl.caught.openLid(Math.min(1, (t - sl.revealT) / 0.8));
+        if (sl.caught.puff) sl.caught.puff(Math.min(1, (t - sl.revealT) / 0.5));
+        beam.visible = true;
+        beam.position.set(c.position.x, c.position.y - 0.4, c.position.z);
+        beamMat.opacity = 0.35 * k;
+        swim(sl.caught, t, 1.5);
+      } else {
+        const k = Math.min(1, (t - sl.relT) / 0.9);
+        c.position.lerp(bobTo.clone().setY(SEA_Y - 0.3), k * 0.25);
+        c.scale.setScalar(Math.max(0.01, 1.3 * (1 - k)));
+        beamMat.opacity = 0.35 * (1 - k);
+        glow.intensity = 3 * (1 - k);
+        if (k >= 1) W.splash(bobTo, 1);
+      }
+      glow.position.copy(c.position);
+    }
+    // 鱼线：竿尖垂到浮漂，中间往下坠
+    const end = sl.caught && sl.state !== "reveal" && sl.state !== "release" ? sl.caught.root.position : world.worldToLocal(bob.top.getWorldPosition(new THREE.Vector3()));
+    const pts = lineGeo.attributes.position;
+    for (let i = 0; i < 12; i++) {
+      const k = i / 11;
+      const sag = sl.state === "casting" ? 0 : Math.sin(k * Math.PI) * 0.35;
+      pts.setXYZ(i, lerp(tip.x, end.x, k), lerp(tip.y, end.y, k) - sag, lerp(tip.z, end.z, k));
+    }
+    pts.needsUpdate = true;
+    line.visible = sl.state !== "reveal" && sl.state !== "release";
+  }
+
+  /* ------------------------------------------------------------ 浅水区游泳的鱼（钓到过的鱼都会在这里） */
+  const swimmers = [];
+  // v15：60 种鱼。海里的（码头 / 远洋）在浅水区绕岛游，水潭的在水潭里打转；传说级和物件不出来
+  const swimOk = (id) => FISH[id] && FISH[id].kind === "fish" && FISH[id].rarity !== "legend" && id !== "mermaid";
+  function addSwimmer(id) {
+    if (!swimOk(id) || swimmers.filter((s) => s.id === id).length >= 2) return;
+    const inPool = FISH[id].spot === "pool";
+    if (inPool ? swimmers.filter((s) => s.pool).length >= 4 : swimmers.filter((s) => !s.pool).length >= 14) return;
+    const it = buildFish(id, { toon, outlined });
+    it.root.scale.setScalar(inPool ? 0.42 : id === "whale" ? 1.6 : 1.1);
+    it.root.traverse((o) => { o.raycast = () => {}; });
+    world.add(it.root);
+    swimmers.push(inPool
+      ? { id, it, pool: true, r: 0.12 + Math.random() * 0.22, a: Math.random() * Math.PI * 2, sp: (0.35 + Math.random() * 0.3) * (Math.random() < 0.5 ? -1 : 1), y: -0.16, ph: Math.random() * 6 }
+      : { id, it, r: 4.75 + Math.random() * 0.9, a: Math.random() * Math.PI * 2, sp: (0.12 + Math.random() * 0.1) * (Math.random() < 0.5 ? -1 : 1), y: id === "jelly" ? -0.12 : -0.2, ph: Math.random() * 6 });
+  }
+  function setBook(book) {
+    for (const id of Object.keys(book || {})) {
+      const have = swimmers.filter((s) => s.id === id).length;
+      const want = Math.min(2, book[id]);
+      for (let i = have; i < want; i++) addSwimmer(id);
+    }
+  }
+
+  const schools = [0xffb27a, 0x8fd3ff, 0xffe17a].map((c, i) => {
+    const g = new THREE.Group();
+    for (let k = 0; k < 7; k++) {
+      const f = buildSchoolFish(c);
+      f.position.set((k % 3) * 0.18 - 0.2, -(k % 2) * 0.06, Math.floor(k / 3) * 0.16 - 0.15);
+      f.raycast = () => {};
+      g.add(f);
+    }
+    g.userData = { r: 5.6 + i * 0.6, a: i * 2.1, sp: (i % 2 ? -1 : 1) * (0.1 + i * 0.03) };
+    world.add(g);
+    return g;
+  });
+
+  /* ------------------------------------------------------------ 每帧 */
+  const tmp = new THREE.Vector3();
+  function stepActor(a, dt, root) {
+    tmp.subVectors(a.target, root.position); tmp.y = 0;
+    const d = tmp.length();
+    a.walking = d > 0.04;
+    if (a.walking) {
+      root.position.addScaledVector(tmp.normalize(), Math.min(d, dt * (a.speedNow || a.speed)));
+      root.rotation.y = lerpAngle(root.rotation.y, Math.atan2(tmp.x, tmp.z), 0.2);
+    } else {
+      if (a.arrive) { const r = a.arrive; a.arrive = null; r(); }
+      const f = a.face && a.face();
+      if (f) { tmp.subVectors(f, root.position); root.rotation.y = lerpAngle(root.rotation.y, Math.atan2(tmp.x, tmp.z), 0.12); }
+    }
+  }
+  let blinkAt = 2;
+
+  function update(t, dt, sky, cameraLocal) {
+    T = t;
+    for (let i = waits.length - 1; i >= 0; i--) if (t >= waits[i].at) { waits[i].res(); waits.splice(i, 1); }
+
+    // ---- 闲逛：在线时小猫在家附近溜达，小马在草地上慢慢走
+    if (!S.busy && !busyFishing("her") && !SLOTS.her.atDock && t > wanderAt && t > manualUntil) {
+      wanderAt = t + 5 + Math.random() * 6;
+      if (!S.asleep && !S.riding && S.online) {
+        const a = Math.random() * Math.PI * 2, r = 0.3 + Math.random() * 0.8;
+        her.target.copy(HER_HOME).add(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r));
+        her.face = null;
+      }
+      if (!S.riding && !S.asleep && Math.random() < 0.6) {
+        const a = Math.random() * Math.PI * 2, r = Math.random() * 0.7;
+        horse.target.copy(PONY_HOME).add(new THREE.Vector3(Math.cos(a) * r, 0, Math.sin(a) * r));
+      }
+    }
+    // 不在线 / 睡着：小猫趴在小马背上睡觉，小马在家待着
+    const napping = (S.asleep || !S.online) && !S.busy && !busyFishing("her") && !SLOTS.her.atDock && T > manualUntil;
+    if (napping && !S.riding) {
+      if (kitten.root.parent === world && kitten.root.position.distanceTo(pony.root.position) > 0.7) {
+        her.target.copy(nearPoint(kitten.root.position, pony.root.position.clone().setY(0), 0.5 * GAP));
+        if (!her.walking && !her.arrive) { her.face = null; move(her, her.target, 1.6).then(() => { if ((S.asleep || !S.online) && !S.busy) seatKitten(true); }); }
+      }
+    }
+    if (!napping && S.riding && !S.busy) seatKitten(false);
+    if (napping && !S.busy) horse.target.copy(PONY_HOME);
+
+    if (!S.riding) stepActor(her, dt, kitten.root);
+    stepActor(horse, dt, pony.root);
+
+    // ---- 小马
+    if (horse.walking) ponyWalk(pony, t * (horse.speedNow > 1.5 ? 9 : 6), 1);
+    else { ponyWalk(pony, 0, 0); ponyIdle(pony, t); }
+    pony.root.position.y = 0;
+
+    // ---- 小猫的身体
+    const K = kitten, since = t - anim.t0, act = since < anim.dur ? anim.kind : "";
+    const sleepy = S.riding && napping;
+    let y = 0, sx = 1, sy = 1, rx = 0, rz = 0, ry = 0;
+    if (her.walking && !S.riding) { y = Math.abs(Math.sin(t * 12)) * 0.12; rz = Math.sin(t * 12) * 0.08; }
+    else if (sleepy) { const b = Math.sin(t * 1.5) * 0.5 + 0.5; sy = 0.95 + b * 0.04; rx = 0.35; }
+    else if (S.mood === "happy") { const p = (t * 1.2) % 1; y = Math.max(0, Math.sin(p * Math.PI)) * 0.25; }
+    else if (S.mood === "tired" || S.mood === "sleepy") { rx = 0.12; sy = 0.95 + Math.sin(t * 1.4) * 0.02; }
+    else if (S.mood === "angry") { const b = Math.sin(t * 9) * 0.5 + 0.5; sx = 1.05 + b * 0.03; sy = 0.97; }
+    else { rz = Math.sin(t * 1.7) * 0.05; sy = 1 + Math.sin(t * 3.4) * 0.015; }
+    if (act === "swing") { const k = since / anim.dur; rx -= Math.sin(k * Math.PI) * 0.35; y += 0.05; }
+    if (act === "hug") { rx += 0.25; sx *= 1.04; }
+    if (act === "kiss") { y += Math.sin(Math.min(1, since / 0.5) * Math.PI) * 0.35; rx += 0.2; }
+    if (act === "hop") { y += Math.sin(since / anim.dur * Math.PI) * 0.5; }
+    if (act === "highfive") { y += Math.sin(Math.min(1, since / 0.4) * Math.PI) * 0.3; }
+    if (act === "blush") { rz += Math.sin(since * 10) * 0.08; }
+    if (act === "startle") { y += Math.sin(Math.min(1, since / 0.4) * Math.PI) * 0.4; sy *= 1.05; }
+    if (act === "stir") { sy *= 1 + Math.sin(since * 12) * 0.04; }
+    if (act === "give") { rx += 0.15; }
+    K.body.position.y = y;
+    K.body.scale.set(sx, sy, sx);
+    K.body.rotation.set(rx, ry, rz);
+    if (S.riding && horse.walking) K.body.position.y += Math.abs(Math.sin(t * 9)) * 0.04;
+
+    // 手
+    K.arms.forEach((a, i) => {
+      const s = i ? 1 : -1, base = s * 0.25;
+      let z = base, x = 0;
+      if (act === "swing" && i === 1) { z = 2.2 - Math.sin(since / anim.dur * Math.PI) * 1.6; }
+      else if (act === "pat" && i === 1) { z = 2.5; x = -0.5 + Math.sin(since * 16) * 0.25; }
+      else if (act === "hug") { z = s * 1.3; x = -0.9; }
+      else if (act === "highfive" && i === 1) { z = 2.6; }
+      else if (act === "give" || (act === "kiss" && i === 1)) { z = s * 0.6; x = -1.2; }
+      else if (act === "poke" && i === 1) { z = 0.8; x = -1.3 + Math.sin(since * 20) * 0.2; }
+      else if ((SLOTS.her.atDock || (busyFishing("her") && SLOTS.her.state !== "walking")) && i === 1) { z = 0.5; x = -0.6; }
+      else if (S.mood === "happy" && !sleepy) { z = base + s * (0.25 + Math.sin(t * 7 + i) * 0.2); }
+      if (S.riding && !act) return;
+      a.rotation.z = lerp(a.rotation.z, z, 0.3);
+      a.rotation.x = lerp(a.rotation.x, x, 0.3);
+    });
+    // 头：看镜头，偶尔歪头；想你的时候看恐龙
+    let yawT = Math.sin(t * 0.45) * 0.2;
+    if (S.mood === "miss" && !S.busy) {
+      const lp = K.body.worldToLocal(dino.root().getWorldPosition(new THREE.Vector3()));
+      yawT = Math.max(-0.8, Math.min(0.8, Math.atan2(lp.x, lp.z)));
+    }
+    K.head.rotation.y = lerp(K.head.rotation.y, sleepy ? 0 : yawT, 0.1);
+    K.head.rotation.z = S.mood === "miss" ? 0.18 : Math.sin(t * 0.8) * 0.06;
+    K.head.rotation.x = sleepy ? 0.25 : 0;
+    // 表情
+    let eyes = "open";
+    if (sleepy) eyes = "sleep";
+    else if (act === "hug" || act === "kiss" || act === "blush" || act === "pat" || S.mood === "happy") eyes = "happy";
+    else if (act === "startle" || act === "swing") eyes = "wide";
+    else if (S.mood === "tired" || S.mood === "sleepy" || S.mood === "angry") eyes = "half";
+    if (!sleepy && eyes === "open" && t > blinkAt) { eyes = "sleep"; if (t > blinkAt + 0.13) blinkAt = t + 2 + Math.random() * 3; }
+    K.setEyes(eyes);
+    if (K.blushMat) K.blushMat.opacity = act === "blush" || act === "hug" || act === "kiss" || S.mood === "miss" ? 0.95 : 0.5;
+    if (K.tail) K.tail.rotation.y = Math.sin(t * (S.mood === "happy" ? 6 : 2)) * (sleepy ? 0.1 : 0.35);
+    if (K.sweat) K.sweat.visible = S.mood === "tired" && !sleepy;
+    if (K.cap) K.cap.visible = false;
+    if (K.bubble) K.bubble.visible = sleepy && S.asleep;
+    if (K.bubble && K.bubble.visible) K.bubble.scale.setScalar(0.4 + Math.sin(((t * 0.45) % 1) * Math.PI) * 1.1);
+    if (K.yawn) K.yawn.visible = S.mood === "sleepy" && !sleepy && Math.sin(t * 0.6) > 0.9;
+
+    // ---- 头顶：心情 / Zzz / 手上的东西
+    const hh = world.worldToLocal(headOf(K));
+    moodSprite.visible = !!S.mood && !sleepy && !S.busy;
+    if (moodSprite.visible) moodSprite.position.set(hh.x + 0.2, hh.y + 0.15 + Math.sin(t * 2) * 0.04, hh.z);
+    zz.forEach((s, i) => {
+      s.visible = sleepy;
+      if (!sleepy) return;
+      const p = (t * 0.3 + i / 3) % 1;
+      s.position.set(hh.x + 0.13 + p * 0.33, hh.y + p * 0.6, hh.z);
+      s.material.opacity = Math.sin(p * Math.PI) * (S.asleep ? 1 : 0.6);
+      s.scale.setScalar(0.12 + p * 0.13);
+    });
+    if (prop.visible) {
+      const hand = K.arms[1].getWorldPosition(new THREE.Vector3());
+      world.worldToLocal(hand);
+      prop.position.set(hand.x, hand.y + 0.2, hand.z);
+    }
+    for (const list of [hearts, stars]) for (const s of list) {
+      const p = (t - s.userData.t0) / 1.3;
+      s.visible = p >= 0 && p < 1 && !!s.userData.at;
+      if (!s.visible) continue;
+      s.position.set(s.userData.at.x + s.userData.dx * 0.65 * (0.5 + p), s.userData.at.y + p * 0.65, s.userData.at.z + s.userData.dz * 0.65 * (0.5 + p));
+      s.material.opacity = Math.sin(p * Math.PI);
+      s.scale.setScalar(0.14 + p * 0.1);
+    }
+
+    // ---- 钓鱼
+    for (const sl of slotList) updateSlot(sl, t, cameraLocal);
+
+    // ---- 浅水区的鱼
+    schoolTick(t);
+    for (const g of schools) {
+      const u = g.userData; u.a += u.sp * dt;
+      g.position.set(Math.cos(u.a) * u.r, SEA_Y - 0.22 + Math.sin(t + u.r) * 0.03, Math.sin(u.a) * u.r);
+      g.rotation.y = -(u.a + Math.sign(u.sp) * Math.PI / 2);
+    }
+    for (const s of swimmers) {
+      s.a += s.sp * dt;
+      const x = Math.cos(s.a) * s.r + (s.pool ? POOL.x : 0), z = Math.sin(s.a) * s.r + (s.pool ? POOL.z : 0);
+      s.it.root.position.set(x, (s.pool ? 0 : SEA_Y) + s.y + Math.sin(t * 1.2 + s.ph) * (s.pool ? 0.015 : 0.04), z);
+      // 鱼头朝 +x：转到沿切线方向游
+      const dir = Math.sign(s.sp);
+      s.it.root.rotation.y = -(s.a + dir * Math.PI / 2);
+      swim(s.it, t + s.ph, 1);
+    }
+  }
+
+  function setState(next) {
+    if ("online" in next) S.online = next.online;
+    if ("asleep" in next) S.asleep = next.asleep;
+    if ("mood" in next) {
+      S.mood = next.mood || null;
+      if (S.mood) setEmoji(moodSprite, MOOD_EMOJI[S.mood] || "💭");
+    }
+  }
+
+  return {
+    update, play, setState, fish, pull, setBook, walkHer, leaveDock, localSpot, localBusy, leaveLocal, fishFocus,
+    // 小游戏用：让小猫走到某处（返回到达的 promise）/ 朝向某处
+    herGo: (p) => { if (S.riding) seatKitten(false); manualUntil = T + 25; her.face = null; return move(her, p, 1.6); },
+    herFace: (fn) => { her.face = fn; },
+    kittenScale: KITTEN_SCALE,
+    // fishing()：有人在钓或者站在码头上（镜头对准码头）；fishing(actor)：这个角色正在钓（站着等下一竿不算）
+    fishing: (actor) => (actor ? busyFishing(actor) : slotList.some((sl) => sl.state !== "idle" || sl.atDock)),
+    kittenScreen: () => screenOf(world.localToWorld(world.worldToLocal(headOf(kitten)))),
+    kitten, pony,
+  };
+}

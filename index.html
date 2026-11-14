@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>小窝</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🦖</text></svg>">
+<link rel="stylesheet" href="style.css?v=16">
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+
+<!-- 锁屏 -->
+<section id="lock" class="lock" hidden>
+  <div class="lock-card">
+    <div class="lock-pet">
+      <span class="sprite emoji-pet sleeping" data-pet-emoji>🦖</span>
+      <span class="zzz"><i>z</i><i>z</i><i>Z</i></span>
+    </div>
+    <h1 class="title">Zilong 的小窝</h1>
+    <p class="muted">小家伙在门口睡着了，说出暗号叫醒它</p>
+    <form id="lock-form" autocomplete="off">
+      <input id="pw" type="password" placeholder="暗号" autocomplete="current-password" required>
+      <label class="remember"><input id="remember" type="checkbox" checked> 记住这台设备</label>
+      <button type="submit" id="unlock-btn">进门</button>
+      <p id="lock-msg" class="lock-msg" aria-live="polite"></p>
+    </form>
+  </div>
+</section>
+
+<!-- 主页面 -->
+<main id="app" hidden>
+  <header class="top">
+    <h1 class="title">Zilong 今天怎么样</h1>
+    <p class="clocks"><span id="clock-his"></span><span id="clock-you"></span></p>
+    <p class="muted small" id="synced"></p>
+  </header>
+
+  <section class="scene loading3d" id="scene">
+    <div class="sky"><div class="stars"></div><div class="orb"></div><div class="cloud c1"></div><div class="cloud c2"></div></div>
+    <div class="hill"></div>
+    <div class="scene3d" id="scene3d"></div>
+    <div class="bubble" id="bubble"></div>
+    <button class="px-toggle" id="px-toggle" type="button">高清</button>
+    <div class="species" role="group" aria-label="换个小伙伴">
+      <button type="button" data-species="dino" title="小恐龙">🦖</button><button type="button" data-species="cat" title="猫猫">🐱</button><button type="button" data-species="penguin" title="企鹅">🐧</button><button type="button" data-species="chick" title="小鸡">🐥</button>
+    </div>
+    <p class="hint small" id="hint">点它 · 按住摸摸头 · 点草地它会跑过去 · 左右拖动转小岛 · 双指捏合拉近</p>
+    <div class="pet-wrap" id="pet-wrap">
+      <button class="pet" id="pet" aria-label="戳一下">
+        <span class="sprite emoji-pet" id="sprite" data-pet-emoji>🦖</span>
+        <span class="zzz" id="pet-zzz"><i>z</i><i>z</i><i>Z</i></span>
+        <span class="sparkles" id="sparkles"><i>✦</i><i>✧</i><i>✦</i></span>
+      </button>
+      <div class="shadow"></div>
+    </div>
+    <p class="poke-count small" id="poke-count"></p>
+  </section>
+
+  <section class="card social" id="social" hidden>
+    <div class="who-pick" id="who-pick" hidden>
+      <p>第一次来，先告诉小窝你是谁：</p>
+      <button type="button" data-who="her">我是她 💕</button><button type="button" data-who="me">我是 Zilong</button>
+    </div>
+    <div id="social-main">
+      <div class="anger" id="anger" hidden>
+        <div class="anger-head"><b>😤 气消条</b><span id="combo" class="combo"></span></div>
+        <div class="meter"><i id="anger-fill"></i></div>
+        <p class="small" id="anger-text"></p>
+      </div>
+      <div class="full"><span class="small muted">饱腹</span><div class="meter green"><i id="full-fill"></i></div><span class="small" id="full-text"></span></div>
+      <div class="wallet" id="wallet">
+        <div class="wallet-head">
+          <b class="star-count">⭐ <span id="stars">0</span></b>
+          <span class="level" id="level"></span>
+          <span class="spacer"></span>
+          <button type="button" data-panel="earn" class="mini">怎么赚星星</button>
+        </div>
+        <div class="tabs" id="tabs">
+          <button type="button" data-panel="games">🎮 一起玩</button>
+          <button type="button" data-panel="shop">🛍 商店</button>
+          <button type="button" data-panel="gacha">🎰 扭蛋</button>
+          <button type="button" data-panel="farm">🌱 菜地</button>
+          <button type="button" data-panel="wardrobe">👗 衣橱</button>
+          <button type="button" data-panel="qa">📝 每日一问</button>
+          <button type="button" data-panel="book">📖 图鉴</button>
+        </div>
+        <div class="earn small panel" id="earn" hidden></div>
+        <div class="panel" id="shop-wrap" hidden><div class="shop" id="shop"></div></div>
+        <div class="book panel" id="book" hidden></div>
+        <div class="panel" id="gacha" hidden></div>
+        <div class="panel" id="farm" hidden></div>
+        <div class="panel" id="wardrobe" hidden></div>
+        <div class="panel" id="qa" hidden></div>
+        <div class="panel" id="games" hidden></div>
+      </div>
+      <p class="her-status small" id="her-status"></p>
+      <div class="edit-bar" id="edit-bar" hidden>
+        <span id="edit-hint">点一件装饰，拖到想放的地方</span>
+        <button type="button" data-edit="rotate">↻ 转一下</button>
+        <button type="button" data-edit="done" class="primary">✓ 完成</button>
+        <button type="button" data-edit="cancel">取消</button>
+      </div>
+      <div class="game-bar" id="game-bar" hidden></div>
+      <div class="actions" id="actions"></div>
+      <div class="tray" id="tray" hidden></div>
+      <form class="note" id="note-form" hidden>
+        <textarea maxlength="200" rows="2" placeholder="写点什么…（只有你们俩看得到）"></textarea>
+        <button type="submit">寄出 💌</button>
+      </form>
+      <h2 class="tl-title">我们的小日记 <button type="button" class="mini-btn" id="tl-toggle" data-tl="toggle" hidden>展开全部</button></h2>
+      <ul class="timeline" id="timeline"></ul>
+    </div>
+  </section>
+
+  <section class="tiles">
+    <article class="tile" id="t-recovery">
+      <h2><span class="emo" id="e-recovery">🔋</span>恢复</h2>
+      <div class="ring"><svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"/><circle class="bar" cx="60" cy="60" r="50"/></svg><div class="ring-label"><b class="num" data-k="recovery"></b><span class="unit">%</span></div></div>
+      <p class="tag" id="recovery-tag"></p>
+      <p class="muted small" id="bio"></p>
+    </article>
+    <article class="tile" id="t-sleep">
+      <h2><span class="emo" id="e-sleep">😴</span>昨晚睡眠</h2>
+      <p class="big"><b class="num" data-k="sleep"></b><span class="unit">小时</span></p>
+      <p class="muted small" id="sleep-times"></p>
+      <div class="stages" id="stages"></div>
+      <p class="legend small"><span><i class="sws"></i>深睡</span><span><i class="rem"></i>REM</span><span><i class="light"></i>浅睡</span><span><i class="awake"></i>醒着</span></p>
+    </article>
+    <article class="tile" id="t-strain">
+      <h2><span class="emo" id="e-strain">💪</span>今日活动</h2>
+      <div class="ring"><svg viewBox="0 0 120 120"><circle class="track" cx="60" cy="60" r="50"/><circle class="bar" cx="60" cy="60" r="50"/></svg><div class="ring-label"><b class="num" data-k="strain"></b><span class="unit">/21</span></div></div>
+      <p class="tag" id="strain-tag"></p>
+      <p class="muted small" id="steps"></p>
+    </article>
+    <article class="tile" id="t-regular">
+      <h2><span class="emo" id="e-regular">🌝</span>作息规律度</h2>
+      <p class="big"><b class="num" data-k="sri"></b><span class="unit">/100</span></p>
+      <p class="muted small">最近 7 天，越高越规律</p>
+      <p class="streak" id="streak"></p>
+    </article>
+  </section>
+
+  <section class="card">
+    <h2>这一周</h2>
+    <div class="week" id="week"></div>
+    <p class="muted small" id="week-note"></p>
+  </section>
+
+  <section class="card">
+    <h2>作息日历 <span class="muted small">每一格是一天，颜色越深越规律</span></h2>
+    <div class="heat-wrap"><div class="heat" id="heat"></div></div>
+    <p class="muted small" id="heat-tip">点一下格子看那天的数据</p>
+  </section>
+
+
+  <!-- Credits: animated emoji = Google Noto Animated Emoji (CC BY 4.0, https://googlefonts.github.io/noto-emoji-animation/).
+       Island and pets are original Three.js models. Island decorations: CC0 / CC-BY 3.0 models, full attribution in vendor/decor/CREDITS.md. Data: the owner's wearable via the WHOOP API (unofficial). -->
+  <footer class="foot small muted">
+    <p><a href="#" id="logout">退出这台设备</a></p>
+  </footer>
+</main>
+
+<canvas id="fx" aria-hidden="true"></canvas>
+<script src="vendor/lottie_light.min.js"></script>
+<script src="config.js?v=16"></script>
+<script src="app.js?v=16"></script>
+<script src="realtime.js?v=16"></script>
+<script src="social.js?v=16"></script>
+<script src="view.js?v=16"></script>
+<script type="module" src="scene3d.js?v=16"></script>
+<script type="module" src="life-ui.js?v=16"></script>
+</body>
+</html>

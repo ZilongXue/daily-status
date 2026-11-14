@@ -1,0 +1,1222 @@
+// 小窝的 3D 浮空小岛（Three.js r170）。加载失败或 WebGL 不可用时什么都不做，页面保留 2D 版。
+// 和 app.js 的约定：app.js 把数据放在 window.NEST 并派发 "nest:update"；
+// 这里点到东西时派发 "nest:tap" {what, x, y}，换小伙伴时派发 "nest:species" {kind}。
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { buildPet, SPECIES } from "./pet3d.js?v=16";
+import { buildDino } from "./dino3d.js?v=16";
+import { createDecor, encodePos } from "./decor3d.js?v=16";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=16";
+import { MAP, POOL } from "./island3d.js?v=16";
+import { createBatcher } from "./batch3d.js?v=16";
+import { glowSprite, season } from "./home3d.js?v=16";
+
+const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
+
+const params = new URLSearchParams(location.search);
+const sceneEl = document.getElementById("scene");
+const host = document.getElementById("scene3d");
+if (params.has("flat") || !host) throw new Error("3D disabled");
+
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const PIXEL = 3; // 像素模式下，一个渲染像素 = 3 个 CSS 像素
+const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
+let pixelMode = store.get("nest.pixel") === "px";
+
+// 毛绒凹凸贴图（bumpMap）用屏幕导数算法线。有些安卓 GPU 上导数是 0，normalize(0) 得到 NaN，
+// 整只角色就被画成全黑。换成安全版：算不出来就退回原来的法线（只是少了一点毛绒质感）。
+{
+  const src = THREE.ShaderChunk.bumpmap_pars_fragment;
+  const a = src.indexOf("vec3 perturbNormalArb");
+  const b = src.indexOf("}", src.indexOf("return normalize", a)) + 1;
+  if (a >= 0 && b > a) THREE.ShaderChunk.bumpmap_pars_fragment = src.slice(0, a) + `vec3 perturbNormalArb( vec3 surf_pos, vec3 surf_norm, vec2 dHdxy, float faceDirection ) {
+		vec3 dx = dFdx( surf_pos.xyz ) * 1000.0;
+		vec3 dy = dFdy( surf_pos.xyz ) * 1000.0;
+		float lx = dot( dx, dx ), ly = dot( dy, dy );
+		if ( !( lx > 1e-8 ) || !( ly > 1e-8 ) ) return surf_norm;
+		vec3 vSigmaX = dx * inversesqrt( lx );
+		vec3 vSigmaY = dy * inversesqrt( ly );
+		vec3 R1 = cross( vSigmaY, surf_norm );
+		vec3 R2 = cross( surf_norm, vSigmaX );
+		float fDet = dot( vSigmaX, R1 ) * faceDirection;
+		vec3 vGrad = sign( fDet ) * ( dHdxy.x * R1 + dHdxy.y * R2 );
+		vec3 n = abs( fDet ) * surf_norm - vGrad;
+		float ln = dot( n, n );
+		if ( !( ln > 1e-8 ) ) return surf_norm;
+		return n * inversesqrt( ln );
+	}` + src.slice(b);
+}
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "low-power" });
+// 线上不查着色器编译日志（查日志会逼 GPU 当场编完，手机上加载时一卡一卡的）；本地开发照查
+renderer.debug.checkShaderErrors = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) && !new URLSearchParams(location.search).has("fastshader");
+renderer.setClearColor(0x000000, 0);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+host.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+camera.position.set(0, 6.2, 14.5);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.6, -0.7);
+controls.enablePan = false;
+controls.enableZoom = false;
+controls.enableDamping = true;
+controls.minPolarAngle = controls.maxPolarAngle = 1.13; // 转盘：只能左右转
+controls.autoRotate = !REDUCED;
+controls.autoRotateSpeed = 0.5;
+renderer.domElement.style.touchAction = "pan-y"; // 竖着划照常滚动页面，横着划转小岛
+let resumeTimer = 0;
+controls.addEventListener("start", () => { controls.autoRotate = false; clearTimeout(resumeTimer); });
+controls.addEventListener("end", () => { resumeTimer = setTimeout(() => { if (userZoom > 0.98) controls.autoRotate = !REDUCED; }, 6000); });
+
+/* ---------------------------------------------------------------- materials */
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+const OUTLINE = 0x4a2f25;
+
+// 描边网格按几何体缓存（v16）：同一个几何体（树叶、石头、栏杆…）只合并一次顶点
+const outlineGeo = new WeakMap();
+function outlined(mesh, thickness = 0.04) {
+  let m = outlineGeo.get(mesh.geometry);
+  if (!m) {
+    const g = mesh.geometry.clone();
+    for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+    m = mergeVertices(g, 1e-4);
+    m.computeVertexNormals();
+    outlineGeo.set(mesh.geometry, m);
+  }
+  const mat = new THREE.MeshBasicMaterial({ color: OUTLINE, side: THREE.BackSide });
+  mat.userData.outline = thickness; // batch3d 合批时要用
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+
+/* ---------------------------------------------------------------- island */
+const world = new THREE.Group();
+scene.add(world);
+const tappables = [];
+const tag = (obj, what) => { obj.traverse((o) => { o.userData.what = what; }); tappables.push(obj); return obj; };
+const W = createWorld({ scene, world, toon, outlined, tag });
+// 风景里不动的小东西合批（?nobatch 关掉，排查用）；减少动态效果的设置下什么都不动，也就不用合
+const batcher = createBatcher(W.env, { enabled: !params.has("nobatch") && !REDUCED });
+const top = W.top;
+
+// 规律树：一团一团蓬松的树冠，挂几个小桃子
+const tree = new THREE.Group();
+const trunk = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.19, 0.95, 9), toon(0x8a5a3b)), 0.03);
+trunk.position.y = 0.47;
+const branch = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.5, 7), toon(0x8a5a3b)), 0.025);
+branch.position.set(0.18, 0.85, 0.05); branch.rotation.z = -0.8;
+// 规律树跟着季节换装：春天粉色花、夏天绿、秋天红黄、冬天深绿；春秋还会飘花瓣 / 落叶
+const SEASON = season();
+const LEAF = {
+  spring: [0xf7a8c4, 0xffc4d8, 0xf093b5, 0xffd6e4], summer: [0x58b873, 0x6fcf86, 0x4fae6a, 0x7fd88e],
+  autumn: [0xf0a03c, 0xe8743b, 0xf6c453, 0xd95d39], winter: [0x4f9a6a, 0x5aa676, 0x478f60, 0x63ad7c],
+}[SEASON];
+const leaves = [[0, 1.35, 0, 0.62], [0.42, 1.2, 0.18, 0.45], [-0.4, 1.22, 0.1, 0.47], [0.05, 1.25, -0.4, 0.48],
+  [0.1, 1.75, 0.05, 0.47], [-0.22, 1.6, 0.32, 0.36], [0.3, 1.58, -0.22, 0.36], [0.02, 2.08, 0, 0.3]].map(([x, y, z, r], i) => {
+  const m = outlined(new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), toon(LEAF[i % LEAF.length])), 0.035);
+  m.position.set(x, y, z);
+  m.scale.y = 0.85;
+  return m;
+});
+const peaches = [[0.45, 1.0, 0.45], [-0.5, 1.05, 0.38], [0.2, 1.45, 0.55], [-0.15, 1.95, 0.32]].map(([x, y, z]) => {
+  const pch = outlined(new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 8), toon(0xffa3a3)), 0.015);
+  pch.position.set(x, y, z);
+  return pch;
+});
+tree.add(trunk, branch, ...leaves, ...peaches);
+tree.position.set(1.95, 0, -1.25);
+world.add(tag(tree, "tree"));
+// 飘落的叶子 / 花瓣（一个 InstancedMesh）：从树冠里出来，左右飘着落到草地上，再从头来
+const falling = (() => {
+  if (SEASON !== "autumn" && SEASON !== "spring") return null;
+  const N = 12, geo = new THREE.SphereGeometry(0.05, 6, 4).scale(1, 0.25, 0.7);
+  const im = new THREE.InstancedMesh(geo, toon(0xffffff, { side: THREE.DoubleSide }), N);
+  const c = new THREE.Color();
+  for (let i = 0; i < N; i++) im.setColorAt(i, c.setHex(LEAF[i % LEAF.length]));
+  im.raycast = () => {};
+  im.frustumCulled = false;
+  world.add(im);
+  const seeds = Array.from({ length: N }, (_, i) => ({ p: i / N, a: i * 2.4, r: 0.2 + ((i * 37) % 10) / 18, sp: 0.07 + ((i * 13) % 7) / 100 }));
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), pos = new THREE.Vector3(), sc = new THREE.Vector3(1, 1, 1);
+  return (t) => {
+    seeds.forEach((s, i) => {
+      const k = (t * s.sp + s.p) % 1, y = 1.7 * (1 - k);
+      pos.set(tree.position.x + Math.cos(s.a + k * 2) * s.r * (1 + k) + Math.sin(t * 1.3 + i) * 0.15, y + 0.02, tree.position.z + Math.sin(s.a + k * 2) * s.r * (1 + k));
+      e.set(Math.sin(t * 2 + i) * 0.8, t + i, Math.cos(t * 1.7 + i) * 0.6);
+      sc.setScalar(k > 0.92 ? (1 - k) / 0.08 : 1);
+      im.setMatrixAt(i, m4.compose(pos, q.setFromEuler(e), sc));
+    });
+    im.instanceMatrix.needsUpdate = true;
+  };
+})();
+
+// 小床
+const bed = new THREE.Group();
+const frame = outlined(new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.28, 1.15), toon(0xd39a6a)), 0.035);
+frame.position.y = 0.14;
+const headboard = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.75, 1.15), toon(0xc0875a)), 0.035);
+headboard.position.set(-0.95, 0.37, 0);
+const mattress = outlined(new THREE.Mesh(new THREE.BoxGeometry(1.78, 0.14, 1.05), toon(0xfff6ea)), 0.03);
+mattress.position.y = 0.35;
+const pillow = outlined(new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.14, 0.7), toon(0xffffff)), 0.03);
+pillow.position.set(-0.66, 0.49, 0);
+const blanket = outlined(new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.08, 1.09), toon(0xff9bb3)), 0.03);
+blanket.position.set(0.32, 0.46, 0);
+bed.add(frame, headboard, mattress, pillow, blanket);
+bed.position.set(-1.55, 0, -0.85);
+bed.rotation.y = 0.35;
+world.add(tag(bed, "bed"));
+
+// 床头小灯：晚上亮
+const lamp = new THREE.Group();
+const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.9, 6), toon(0x6b5446));
+pole.position.y = 0.45;
+const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 8), new THREE.MeshBasicMaterial({ color: 0xffe9a8 }));
+bulb.position.y = 0.98;
+const lampLight = new THREE.PointLight(0xffc870, 0, 4, 1.5);
+lampLight.position.y = 1.0;
+const bedGlow = glowSprite(0xffc870, 1.3);
+bedGlow.position.y = 0.98;
+lamp.add(pole, bulb, lampLight, bedGlow);
+lamp.position.set(-2.6, 0, 0.1);
+world.add(lamp);
+
+// 花：今天的活动量，开花数 = strain（0–21）
+// 21 朵花 × 8 个零件，原来每个零件画一次（168 次）。现在零件只当"骨架"算位置，
+// 真正画的是 4 个 InstancedMesh（茎 / 花瓣 / 花心 / 花苞），一共 4 次。
+const flowers = new THREE.Group();
+const PETALS = [0xff8fab, 0xffd166, 0xc3a6ff, 0xff9e7a, 0x8fd3ff, 0xffffff];
+const flowerList = [];
+const flowerRig = new THREE.Group(); // 不加进场景，只用来算矩阵（和 flowers 同一个坐标系）
+const fParts = { stem: [], petal: [], heart: [], bud: [] };
+// 7 簇、每簇 3 朵，散在草地上（避开路、家和床），比排成一圈自然
+const FLOWER_CLUSTERS = [[-1.0, 2.2], [1.75, 1.75], [3.0, 0.2], [-2.95, -0.3], [-0.3, -1.55], [2.6, -1.6], [-2.05, 2.65]];
+for (let i = 0; i < 21; i++) {
+  const [cx, cz] = FLOWER_CLUSTERS[i % 7], k = Math.floor(i / 7);
+  const ang = k * 2.1 + i * 0.7, rr = 0.12 + k * 0.13;
+  const f = new THREE.Group();
+  const stem = new THREE.Object3D();
+  stem.position.y = 0.17;
+  fParts.stem.push(stem);
+  const bloom = new THREE.Group();
+  for (let k = 0; k < 5; k++) {
+    const p = new THREE.Object3D();
+    const pa = (k / 5) * Math.PI * 2;
+    p.position.set(Math.cos(pa) * 0.09, 0, Math.sin(pa) * 0.09);
+    p.scale.set(1, 0.5, 1);
+    p.userData.color = PETALS[i % PETALS.length];
+    bloom.add(p);
+    fParts.petal.push(p);
+  }
+  const heart = new THREE.Object3D();
+  heart.position.y = 0.02;
+  bloom.add(heart);
+  fParts.heart.push(heart);
+  bloom.position.y = 0.38;
+  const bud = new THREE.Object3D();
+  bud.position.y = 0.36;
+  fParts.bud.push(bud);
+  f.add(stem, bloom, bud);
+  f.position.set(cx + Math.cos(ang) * rr, 0, cz + Math.sin(ang) * rr);
+  f.scale.setScalar(0.85 + ((i * 37) % 10) / 25);
+  f.userData.phase = Math.random() * Math.PI * 2;
+  flowerRig.add(f);
+  flowerList.push({ f, bloom, bud, open: 0, target: 0 });
+}
+const flowerMeshes = [
+  ["stem", new THREE.CylinderGeometry(0.025, 0.03, 0.34, 5), 0x3f9a55],
+  ["petal", new THREE.SphereGeometry(0.075, 8, 6), 0xffffff],
+  ["heart", new THREE.SphereGeometry(0.05, 8, 6), 0xffe37a],
+  ["bud", new THREE.SphereGeometry(0.07, 8, 6), 0x5fae5f],
+].map(([k, geo, col]) => {
+  const list = fParts[k];
+  const im = new THREE.InstancedMesh(geo, toon(col), list.length);
+  im.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  if (k === "petal") { const c = new THREE.Color(); list.forEach((p, i) => im.setColorAt(i, c.setHex(p.userData.color))); }
+  im.frustumCulled = false;
+  im.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0.3, 0.4), 4.2); // 点击检测用：盖住所有花簇
+  flowers.add(im);
+  return { im, list };
+});
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+function syncFlowers() {
+  flowerRig.updateMatrixWorld(true);
+  for (const { im, list } of flowerMeshes) {
+    list.forEach((o, i) => {
+      let vis = true;
+      for (let p = o; p; p = p.parent) if (!p.visible) { vis = false; break; }
+      im.setMatrixAt(i, vis ? o.matrixWorld : ZERO);
+    });
+    im.instanceMatrix.needsUpdate = true;
+  }
+}
+world.add(tag(flowers, "flowers"));
+
+// 电量水晶：恢复
+const crystalMat = toon(0xf4b33a, { emissive: 0xf4b33a, emissiveIntensity: 0.55 });
+const crystal = outlined(new THREE.Mesh(new THREE.OctahedronGeometry(0.24, 0), crystalMat), 0.03);
+crystal.scale.y = 1.5;
+const crystalLight = new THREE.PointLight(0xf4b33a, 2.5, 3.5, 1.5);
+const crystalWrap = new THREE.Group();
+crystalWrap.add(crystal, crystalLight);
+world.add(tag(crystalWrap, "crystal"));
+
+// 他送的花：插在小花瓶里，48 小时内最多 3 枝
+const vase = new THREE.Group();
+const pot = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.16, 0.34, 12), toon(0x9fd3ff)), 0.025);
+pot.position.y = 0.17;
+vase.add(pot);
+const roses = [-0.09, 0.0, 0.09].map((x, i) => {
+  const r = new THREE.Group();
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.5, 5), toon(0x3f9a55));
+  stem.position.y = 0.25;
+  const bloom = outlined(new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8), toon(i === 1 ? 0xff4d6d : 0xff7a93)), 0.02);
+  bloom.position.y = 0.52;
+  bloom.scale.set(1, 0.85, 1);
+  r.add(stem, bloom);
+  r.position.set(x, 0.2, 0);
+  r.rotation.z = -x * 2.5;
+  r.visible = false;
+  vase.add(r);
+  return r;
+});
+vase.position.set(1.35, 0, 1.45);
+vase.visible = false;
+world.add(tag(vase, "gift"));
+
+function makeBandage() {
+  const g = new THREE.Group();
+  const a = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.08, 0.02), toon(0xffe4c9));
+  const b = a.clone(); b.rotation.z = Math.PI / 2;
+  g.add(a, b);
+  g.position.set(0.24, 0.3, 0.36);
+  g.rotation.set(-0.5, 0.45, 0.6);
+  g.visible = false;
+  return g;
+}
+
+/* ---------------------------------------------------------------- sprites: Zzz, sparkles, hearts */
+function textSprite(text, color, size = 64) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.font = `800 ${size * 0.8}px ui-rounded, system-ui, sans-serif`;
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.lineWidth = size * 0.1; g.strokeStyle = "#ffffff"; g.strokeText(text, size / 2, size / 2);
+  g.fillStyle = color; g.fillText(text, size / 2, size / 2);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthWrite: false }));
+  s.raycast = () => {};
+  return s;
+}
+const zzz = [0, 1, 2].map(() => { const s = textSprite("Z", "#6f7ad6"); s.visible = false; world.add(s); return s; });
+const sparks = Array.from({ length: 7 }, () => { const s = textSprite("✦", "#ffc93c"); s.visible = false; world.add(s); return s; });
+const floatHearts = Array.from({ length: 6 }, () => { const s = textSprite("♥", "#ff6b8b"); s.visible = false; s.userData.t0 = -10; world.add(s); return s; });
+
+/* ---------------------------------------------------------------- lights */
+const hemi = new THREE.HemisphereLight(0xdff3ff, 0x6f8f5a, 1.6);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+Object.assign(sun.shadow.camera, { left: -7, right: 7, top: 7, bottom: -7, near: 1, far: 30 });
+sun.shadow.bias = -0.0015;
+sun.shadow.normalBias = 0.02;
+// 影子：小伙伴、树、床、装饰投影（描边、草、花这些小东西不投，省性能）
+function castShadows() {
+  for (const o of [tree, bed, ...(pet ? [pet.root] : []), ...extraCasters, ...castActors]) o.traverse((m) => {
+    if (m.isMesh && !m.material.side && !m.userData.noShadow && !m.material.transparent) m.castShadow = true; // 描边是 BackSide（side=1），不投影；透明的也不投
+  });
+  for (const o of [...(pet ? [pet.root] : []), ...castActors]) addRim(o);
+}
+// 角色的轮廓光：侧面和背光的边缘亮一圈，让小伙伴从草地上"跳"出来（颜色跟天色走）
+const RIM = { color: { value: new THREE.Color(0xfff2d8) }, k: { value: 0.32 } };
+function addRim(root) {
+  root.traverse((m) => {
+    if (!m.isMesh) return;
+    for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+      if (!mat || !mat.isMeshToonMaterial || mat.userData.rim || mat.transparent || mat.side === THREE.BackSide) continue;
+      mat.userData.rim = true;
+      const prev = mat.onBeforeCompile, prevKey = mat.customProgramCacheKey;
+      mat.onBeforeCompile = function (sh, r) {
+        prev.call(this, sh, r);
+        sh.uniforms.uRimC = RIM.color; sh.uniforms.uRimK = RIM.k;
+        sh.fragmentShader = "uniform vec3 uRimC; uniform float uRimK;\n" + sh.fragmentShader.replace("#include <opaque_fragment>",
+          "float rimF = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);\noutgoingLight += uRimC * uRimK * smoothstep(0.55, 0.85, rimF);\n#include <opaque_fragment>");
+      };
+      mat.customProgramCacheKey = function () { return prevKey.call(this) + "|rim"; };
+      mat.needsUpdate = true;
+    }
+  });
+}
+const extraCasters = [], castActors = [];
+const fill = new THREE.DirectionalLight(0xffffff, 0.6); // 跟着相机的柔光，夜里也看得清脸
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+// 点光源数量固定（v16）：three.js 按"场景里有几盏点光"编译着色器，后来多一盏灯（钓鱼的光、装饰灯、夜里的灯）
+// 所有材质都得重编一遍，手机上一卡好几秒。所以先摆几盏不亮的占位灯，真灯亮起来就熄掉一盏占位，总数不变。
+const LIGHT_BUDGET = 7;
+const spareLights = Array.from({ length: LIGHT_BUDGET }, () => {
+  const l = new THREE.PointLight(0x000000, 0, 0.01, 2);
+  l.position.set(0, -60, 0); l.userData.spare = true;
+  scene.add(l);
+  return l;
+});
+function balanceLights() {
+  let real = 0;
+  scene.traverseVisible((o) => { if (o.isPointLight && !o.userData.spare) real++; });
+  for (let i = 0; i < LIGHT_BUDGET; i++) spareLights[i].visible = i < LIGHT_BUDGET - real;
+}
+// 新模块（小岛生活、扭蛋菜地、小游戏）加进来以后，先停画几帧，在后台把它们的着色器编好（手机支持并行编译时界面不卡），最多停 3 秒
+let warming = false;
+function warmUp(max = 3000) {
+  if (!renderer.compileAsync) return Promise.resolve();
+  warming = true;
+  balanceLights();
+  return Promise.race([renderer.compileAsync(scene, camera).catch(() => {}), new Promise((r) => setTimeout(r, max))]).then(() => { warming = false; });
+}
+const idle = () => new Promise((r) => (window.requestIdleCallback ? requestIdleCallback(() => r(), { timeout: 800 }) : setTimeout(r, 120)));
+
+// 光：主光（太阳 / 月亮）暖、天光冷，阴影里自然偏蓝紫；补光（跟着镜头）只留一点，不然整个岛被"打平"。
+// 夜里整体压暗偏蓝，靠灯、窗户和萤火虫点亮。rim = 角色轮廓光。
+const SKY = {
+  dawn: { hemi: [0xffd3c4, 0x7d8a8a, 1.15], sun: [0xffb486, 2.35], lamp: 0.5, fill: 0.4, rim: [0xffd2b0, 0.3] },
+  day: { hemi: [0xd4eaff, 0x8a9a7a, 1.2], sun: [0xfff1dc, 2.75], lamp: 0, fill: 0.28, rim: [0xfff6e2, 0.26] },
+  dusk: { hemi: [0xffb8a6, 0x5e6478, 1.0], sun: [0xff9466, 2.1], lamp: 1.4, fill: 0.45, rim: [0xffb98a, 0.38] },
+  night: { hemi: [0x5f6cc4, 0x1d2742, 0.85], sun: [0xa3b6ff, 0.8], lamp: 3.4, fill: 0.5, rim: [0x9fb6ff, 0.42] },
+};
+function hisHour(d) {
+  const m = /^([+-])(\d\d):(\d\d)$/.exec((d && d.tz) || "+00:00");
+  const off = m ? (m[1] === "-" ? -1 : 1) * (+m[2] * 60 + +m[3]) : 0;
+  const t = new Date(Date.now() + off * 60000);
+  return t.getUTCHours() + t.getUTCMinutes() / 60;
+}
+const localHour = () => { const t = new Date(); return t.getHours() + t.getMinutes() / 60; };
+let skyKind = "day";
+const lightBase = { hemi: 1.2, sun: 2.75 }, dimNow = { k: 0 }, STORM_FOG = new THREE.Color(0x5d6878);
+let fogBase = null;
+function applySky(h) {
+  const k = h >= 5 && h < 7.5 ? "dawn" : h >= 7.5 && h < 17 ? "day" : h >= 17 && h < 19.5 ? "dusk" : "night";
+  skyKind = k;
+  const s = SKY[k];
+  W.setSky(k);
+  hemi.color.setHex(s.hemi[0]); hemi.groundColor.setHex(s.hemi[1]); hemi.intensity = s.hemi[2];
+  sun.color.setHex(s.sun[0]); sun.intensity = s.sun[1];
+  lightBase.hemi = s.hemi[2]; lightBase.sun = s.sun[1];
+  lampLight.intensity = s.lamp;
+  fill.intensity = s.fill;
+  RIM.color.value.setHex(s.rim[0]); RIM.k.value = s.rim[1];
+  bedGlow.material.opacity = s.lamp > 1 ? (k === "night" ? 0.9 : 0.5) : 0;
+  bulb.material.color.setHex(s.lamp > 1 ? 0xffe08a : 0xf3eee0);
+}
+
+/* ---------------------------------------------------------------- pet */
+let pet = null;
+let kind = KINDS[store.get("nest.species")] ? store.get("nest.species") : "dino"; // 默认是她送的小恐龙
+const PET_SCALE = 0.88; // 和岛上的东西比例协调（大约齐到小木屋的门）；互动时镜头会拉近
+const home = new THREE.Vector3(0.35, 0, 0.75);
+const walkTo = home.clone();
+let arriveCb = null, faceFn = null;
+
+function setSpecies(k) {
+  if (pet) {
+    world.remove(pet.root);
+    pet.root.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
+    const i = tappables.indexOf(pet.root);
+    if (i >= 0) tappables.splice(i, 1);
+  }
+  kind = KINDS[k] ? k : "dino";
+  store.set("nest.species", kind);
+  pet = kind === "dino" ? buildDino({ toon, outlined }) : buildPet(kind, { toon, outlined });
+  pet.bandage = makeBandage();
+  pet.bandage.visible = angry;
+  pet.head.add(pet.bandage);
+  pet.root.position.copy(walkTo);
+  world.add(pet.root);
+  tappables.push(pet.root);
+  placePet(true);
+  castShadows();
+  document.querySelectorAll("[data-species]").forEach((b) => b.classList.toggle("on", b.dataset.species === kind));
+  dispatchEvent(new CustomEvent("nest:species", { detail: { kind } }));
+}
+
+const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_house", "cat_tower", "hammock", "star_lamp", "carousel", "hot_air_heart",
+  "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
+const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
+  has: (id) => GACHA_IDS.has(id),
+  build: async (id) => (await import("./gacha3d.js?v=16")).buildGachaDecor(id, { toon, outlined }),
+} });
+
+/* ---------------------------------------------------------------- state from data */
+const BAND_HEX = { green: 0x3fbf7f, yellow: 0xf4b33a, red: 0xef5d5d };
+let mood = "chill";
+
+function update() {
+  const N = window.NEST;
+  if (!N || !N.data) return;
+  const d = N.data;
+  const prev = mood;
+  mood = N.mood || "chill";
+  const t = d.today || {};
+  const rec = t.recovery ?? 50;
+  const c = BAND_HEX[t.band] ?? 0xb9a89c;
+  crystalMat.color.setHex(c); crystalMat.emissive.setHex(c); crystalLight.color.setHex(c);
+  const k = (0.65 + 0.75 * (rec / 100)) * 0.7;
+  crystal.scale.set(k, k * 1.5, k);
+  crystalLight.intensity = 1 + 3 * (rec / 100);
+  // 没有活动数据（被藏起来了）时，花只是装饰
+  const n = t.strain == null ? 9 : Math.max(0, Math.min(21, Math.round(t.strain || 0)));
+  flowerList.forEach((x, i) => { x.target = i < n ? 1 : 0; });
+  applySky(localHour());
+  if (prev !== mood) placePet();
+}
+addEventListener("nest:update", update);
+setInterval(() => applySky(localHour()), 60000);
+
+const UP = new THREE.Vector3(0, 1, 0);
+// 躺姿：头朝枕头（床的 -x），脸朝上偏向一侧；镜头转到另一边时它会翻个身，让你总能看到脸
+const lie = (side) => {
+  const y = new THREE.Vector3(-1, 0, 0), z = new THREE.Vector3(0, 0.8, 0.6 * side).normalize();
+  const x = new THREE.Vector3().crossVectors(y, z).normalize();
+  z.crossVectors(x, y).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, z));
+};
+const LIE = { 1: lie(1), [-1]: lie(-1) };
+let lieSide = 1;
+const bedQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), bed.rotation.y);
+
+function placePet(force) {
+  if (!pet) return;
+  const sleeping = mood === "sleep";
+  pet.cap.visible = sleeping;
+  pet.bubble.visible = sleeping;
+  pet.sweat.visible = mood === "tired";
+  if (sleeping) {
+    // 侧躺在床上：头朝枕头（床的 -x），脸朝上偏向床外侧
+    pet.root.position.copy(bed.position).add(new THREE.Vector3(0.45, 0.5, 0).applyAxisAngle(UP, bed.rotation.y));
+    pet.root.quaternion.copy(bedQ).multiply(LIE[lieSide]);
+    pet.root.scale.setScalar(0.62);
+  } else if (force || pet.root.scale.x !== PET_SCALE) {
+    pet.root.position.copy(walkTo);
+    pet.root.rotation.set(0, 0, 0);
+    pet.root.scale.setScalar(PET_SCALE);
+  }
+}
+
+/* ---------------------------------------------------------------- interaction */
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+const pointer = { x: 0, y: 0, active: false, last: 0 };
+let downAt = null, holdTimer = 0, holding = false, holdHeartTimer = 0;
+let react = { kind: "", t0: -10, dir: 1 };
+let angry = false;
+const REACT_DUR = { eat: 1.6, bow: 1.9, hit: 0.6, love: 1.6 };
+
+function pick(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  return ray.intersectObjects(tappables, true)[0];
+}
+function screenOf(v) {
+  const p = v.clone().project(camera), r = renderer.domElement.getBoundingClientRect();
+  return { x: r.left + (p.x + 1) / 2 * r.width, y: r.top + (1 - p.y) / 2 * r.height };
+}
+function headWorld() { return pet.head.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.22, 0)); }
+
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (edit && edit.drag) { editMove(e); return; }
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+  pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+  pointer.active = true; pointer.last = performance.now();
+  if (downAt && Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 8) { clearTimeout(holdTimer); stopHold(); }
+});
+renderer.domElement.addEventListener("pointerleave", () => { pointer.active = false; });
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (edit) { editDown(e); return; }
+  downAt = [e.clientX, e.clientY];
+  const r = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((e.clientX - r.left) / r.width) * 2 - 1;
+  pointer.y = -((e.clientY - r.top) / r.height) * 2 + 1;
+  pointer.active = true; pointer.last = performance.now();
+  const hit = pick(e);
+  if (hit && hit.object.userData.what === "pet") {
+    holdTimer = setTimeout(() => { holding = true; holdHeartTimer = 0; dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "pet-hold", ...screenOf(headWorld()) } })); }, 450);
+  }
+});
+function stopHold() { holding = false; }
+
+// 缩放（v16）：双指捏 / 滚轮（沉浸模式里，或者触控板捏合）把镜头拉近；拉近以后镜头跟着自己的角色走
+let userZoom = 1;
+const ZOOM_MIN = 0.38, ZOOM_MAX = 1.2;
+const touches = new Map();
+let pinch = null;
+const setZoom = (z) => { userZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)); if (userZoom < 0.98) { controls.autoRotate = false; clearTimeout(resumeTimer); } };
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    pinch = { d0: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, z0: userZoom };
+    clearTimeout(holdTimer); stopHold(); downAt = null;
+  }
+}, true);
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pinch && touches.size >= 2) {
+    const [a, b] = [...touches.values()];
+    setZoom(pinch.z0 * pinch.d0 / (Math.hypot(a[0] - b[0], a[1] - b[1]) || 1));
+  }
+});
+const liftTouch = (e) => { touches.delete(e.pointerId); if (pinch) { downAt = null; if (touches.size < 2) pinch = null; } };
+renderer.domElement.addEventListener("pointerup", liftTouch, true);
+renderer.domElement.addEventListener("pointercancel", liftTouch, true);
+renderer.domElement.addEventListener("wheel", (e) => {
+  if (!e.ctrlKey && !document.body.classList.contains("immersive")) return; // 普通模式下滚轮照常滚页面
+  e.preventDefault();
+  setZoom(userZoom * Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+}, { passive: false });
+let tapMode = null;
+const tapPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function groundPoint(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (!ray.ray.intersectPlane(tapPlane, hit)) return null;
+  return world.worldToLocal(hit);
+}
+addEventListener("pointerup", () => { clearTimeout(holdTimer); if (holding) { stopHold(); downAt = null; } });
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (edit) { editUp(); return; }
+  if (!downAt || holding) return;
+  const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 8;
+  downAt = null;
+  if (life3d && life3d.inside()) { if (!moved) life3d.tapInside(e); return; }
+  if (moved) return;
+  if (cast && cast.pull()) return;
+  if (tapMode) { // 小游戏（藏宝）：点到哪就是草地上的哪一点，不管点中的是树还是装饰
+    const p = groundPoint(e);
+    if (p) tapMode(walkable(p), { x: e.clientX, y: e.clientY });
+    return;
+  }
+  const hit = pick(e);
+  // 连续钓：站在钓点上时，点水面（码头前的海 / 水潭里）= 再甩一竿；点草地 = 收竿回家
+  const spot = cast && cast.localSpot();
+  if (spot) {
+    const gp = spot === "pool" ? groundPoint(e) : null;
+    const wantCast = spot === "sea" ? hit && (hit.object.userData.what === "sea" || hit.object.userData.what === "beach")
+      : gp && Math.hypot(gp.x - POOL.x, gp.z - POOL.z) < POOL.r + 0.5;
+    if (wantCast) {
+      W.splash(gp || world.worldToLocal(hit.point.clone()));
+      dispatchEvent(new CustomEvent("nest:fish-again", { detail: { spot, x: e.clientX, y: e.clientY } }));
+      return;
+    }
+  }
+  if (life3d && life3d.tap(hit, e, ray)) return;
+  if (!hit) return;
+  const what = hit.object.userData.what;
+  if (spot && what === "ground") { if (!cast.localBusy()) dispatchEvent(new CustomEvent("nest:fish-leave")); return; }
+  if (what === "gacha" || what === "farm" || what === "xmas") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what, x: e.clientX, y: e.clientY } })); return; }
+  if (what === "her" || what === "pony") {
+    const at = what === "her" ? cast.kittenScreen() : { x: e.clientX, y: e.clientY };
+    dispatchEvent(new CustomEvent("nest:tap", { detail: { what, ...at } }));
+    return;
+  }
+  if (what === "sea" || what === "beach") {
+    W.splash(world.worldToLocal(hit.point.clone()));
+    dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "sea", x: e.clientX, y: e.clientY } }));
+    return;
+  }
+  if (what === "ground") {
+    // 谁在看，点草地就让谁的角色走过去：她是小猫，他是小恐龙；位置实时发给对方
+    const herSide = window.NEST_WHO === "her" && cast;
+    if (!herSide && mood === "sleep") { dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "ground-sleep", x: e.clientX, y: e.clientY } })); return; }
+    const p = walkable(world.worldToLocal(hit.point.clone()));
+    if (herSide) cast.walkHer(p); else walkTo.copy(p);
+    dispatchEvent(new CustomEvent("nest:walk", { detail: { x: p.x, z: p.z } }));
+    return;
+  }
+  if (what === "pet") {
+    const kinds = window.NEST_MODE === "angry" ? ["hit"] : mood === "sleep" ? ["stir"] : ["jump", "wave", "blush", "spin"];
+    react = { kind: kinds[Math.floor(Math.random() * kinds.length)], t0: clock.elapsedTime };
+    const h = screenOf(headWorld());
+    dispatchEvent(new CustomEvent("nest:tap", { detail: { what: "pet", react: react.kind, x: h.x, y: h.y } }));
+    return;
+  }
+  dispatchEvent(new CustomEvent("nest:tap", { detail: { what, item: hit.object.userData.item, x: e.clientX, y: e.clientY } }));
+});
+
+// 草地上能走到的点：限制在平地上（不进河、不上崖、不下海），超出就往岛中心收
+function walkable(p) {
+  p.y = 0;
+  if (p.length() > 3.3) p.setLength(3.3);
+  for (let i = 0; i < 12 && Math.abs(W.heightAt(p.x, p.z)) > 0.02; i++) p.multiplyScalar(0.88);
+  return p;
+}
+
+/* ---------------------------------------------------------------- loop */
+const clock = new THREE.Clock();
+let visible = true, last = 0, blinkAt = 2, lastT = 0, yawnAt = 6;
+new IntersectionObserver(([e]) => { visible = e.isIntersecting; }).observe(host);
+
+function resize() {
+  const w = host.clientWidth, h = host.clientHeight;
+  if (!w || !h) return;
+  renderer.setPixelRatio(pixelMode ? 1 / PIXEL : Math.min(devicePixelRatio || 1, QUALITY[quality].dpr));
+  renderer.setSize(w, h);
+  renderer.domElement.style.imageRendering = pixelMode ? "pixelated" : "auto";
+  camera.aspect = w / h;
+  if (life3d) life3d.resizeInterior();
+  // 让整座岛横向、纵向都放得下：宽屏看高度，竖长屏看宽度；竖长屏（沉浸模式竖着拿）镜头抬高一点，岛在画面里更"立"
+  const aspect = w / h, tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const tall = aspect < 0.8;
+  baseDist = Math.max(9.2 / (2 * tan), (tall ? 10.6 : 11.2) / (2 * tan * aspect));
+  controls.minPolarAngle = controls.maxPolarAngle = tall ? 0.98 : 1.13;
+  narrow = w < 500;
+  const off = camera.position.clone().sub(controls.target).setLength(baseDist);
+  camera.position.copy(controls.target).add(off);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(host);
+
+const tmp = new THREE.Vector3();
+const tmpQ = new THREE.Quaternion();
+const lerp = (a, b, k) => a + (b - a) * k;
+const ease = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+
+function animate(t, dt) {
+  W.update(t, dt);
+  if (falling) falling(t);
+  if (cast) cast.update(t, dt, skyKind, world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())));
+  if (extras) extras.update(t, dt);
+  if (play) play.update(t, dt);
+  if (life3d) {
+    life3d.update(t, dt);
+    const dim = life3d.skyDim(); // 台风天整体压暗
+    if (dim || dimNow.k) { dimNow.k += (dim - dimNow.k) * Math.min(1, dt * 1.5); if (Math.abs(dimNow.k) < 0.002) dimNow.k = 0; hemi.intensity = lightBase.hemi * (1 - 0.4 * dimNow.k); sun.intensity = lightBase.sun * (1 - 0.65 * dimNow.k); if (scene.fog) { if (!fogBase) fogBase = scene.fog.color.clone(); scene.fog.color.copy(fogBase).lerp(STORM_FOG, dimNow.k); } }
+    else if (fogBase) { scene.fog.color.copy(fogBase); fogBase = null; }
+  }
+  decor.update(t, dt, skyKind === "night" || skyKind === "dusk");
+  if (!pet) return;
+  const P = pet, sleep = mood === "sleep";
+  const since = t - react.t0;
+
+  // ---- 走路（点草地它会跑过去）
+  let walking = false;
+  if (!sleep) {
+    tmp.subVectors(walkTo, P.root.position); tmp.y = 0;
+    const dist = tmp.length();
+    if (dist > 0.05) {
+      walking = true;
+      const step = Math.min(dist, dt * (mood === "tired" ? 0.6 : 1.15));
+      P.root.position.addScaledVector(tmp.normalize(), step);
+      const yaw = Math.atan2(tmp.x, tmp.z);
+      P.root.rotation.y = lerpAngle(P.root.rotation.y, yaw, 0.2);
+    } else {
+      if (arriveCb) { const cb = arriveCb; arriveCb = null; cb(); }
+      // 停下来以后慢慢转向镜头（演互动时转向对方）
+      const f = faceFn && faceFn();
+      const toT = f ? f.clone().sub(P.root.position) : world.worldToLocal(camera.getWorldPosition(new THREE.Vector3())).sub(P.root.position);
+      P.root.rotation.y = lerpAngle(P.root.rotation.y, Math.atan2(toT.x, toT.z), f ? 0.12 : 0.04);
+    }
+  }
+
+  // ---- 身体
+  let y = 0, sx = 1, sy = 1, rz = 0, rx = 0, ry = 0;
+  if (sleep) {
+    const b = Math.sin(t * 1.6) * 0.5 + 0.5;
+    sy = 0.97 + b * 0.04; sx = 1 + b * 0.02;
+  } else if (walking) {
+    y = Math.abs(Math.sin(t * 11)) * 0.13;
+    rz = Math.sin(t * 11) * 0.08;
+  } else if (mood === "tired") {
+    const b = Math.sin(t * 1.4) * 0.5 + 0.5;
+    sy = 0.93 + b * 0.04; sx = 1.02 + b * 0.02; rx = 0.1;
+  } else if (mood === "happy") {
+    const p = (t * 1.3) % 1;
+    y = Math.max(0, Math.sin(p * Math.PI)) * 0.45;
+    const sq = p < 0.1 || p > 0.92 ? 0.12 : 0;
+    sx = 1 + sq; sy = 1 - sq;
+  } else {
+    rz = Math.sin(t * 1.8) * 0.05;
+    sy = 1 + Math.sin(t * 3.6) * 0.015;
+  }
+  // 生气模式：低着头、身子缩一点（她在气头上）
+  if (angry && !sleep) { rx += 0.14; sy *= 0.95; }
+  // 点它 / 互动的反应
+  const dur = REACT_DUR[react.kind] || 1.2;
+  if (since < dur) {
+    const k = since / dur;
+    if (react.kind === "eat") { const c = Math.abs(Math.sin(since * 14)); sy *= 1 - c * 0.06; sx *= 1 + c * 0.03; y += 0.04; }
+    if (react.kind === "hit") { const h = 1 - k; sx *= 1 + 0.35 * h; sy *= 1 - 0.3 * h; rz += react.dir * 0.55 * h; y += Math.sin(k * Math.PI) * 0.15; }
+    if (react.kind === "bow") { rx += 0.75 * Math.sin(Math.min(1, since / 0.45) * Math.PI / 2) * (since < 1.4 ? 1 : (dur - since) / (dur - 1.4)); }
+    if (react.kind === "love") { y += Math.abs(Math.sin(since * 6)) * 0.25; }
+    if (react.kind === "jump") { y += Math.sin(Math.min(1, since / 0.6) * Math.PI) * 0.9; }
+    if (react.kind === "spin") { y += Math.sin(Math.min(1, since / 0.7) * Math.PI) * 0.5; ry = ease(since / 0.7) * Math.PI * 2; }
+    if (react.kind === "blush") { rz += Math.sin(k * Math.PI * 3) * 0.12; }
+    if (react.kind === "stir") { sy *= 1 + Math.sin(k * Math.PI * 4) * 0.04; }
+  }
+  if (holding) { rz += Math.sin(t * 7) * 0.08; sy *= 0.96; }
+  P.body.position.y = y;
+  P.body.scale.set(sx, sy, sx);
+  P.body.rotation.set(rx, ry, rz);
+
+  // ---- 头：看向手指 / 鼠标（2 秒没动就看镜头）
+  let yawT = 0, pitchT = 0;
+  if (!sleep) {
+    if (pointer.active && performance.now() - pointer.last < 2500) {
+      ndc.set(pointer.x, pointer.y);
+      ray.setFromCamera(ndc, camera);
+      const target = ray.ray.at(camera.position.distanceTo(P.root.getWorldPosition(tmp)) * 0.85, new THREE.Vector3());
+      const local = P.body.worldToLocal(target).sub(P.head.position);
+      yawT = Math.max(-0.7, Math.min(0.7, Math.atan2(local.x, local.z)));
+      pitchT = Math.max(-0.35, Math.min(0.35, -Math.atan2(local.y, Math.hypot(local.x, local.z))));
+    } else {
+      yawT = Math.sin(t * 0.4) * 0.15;
+    }
+  }
+  if (holding) { pitchT = 0.15; }
+  P.head.rotation.y = lerp(P.head.rotation.y, yawT, 0.12);
+  P.head.rotation.x = lerp(P.head.rotation.x, pitchT, 0.12);
+  P.head.rotation.z = holding ? Math.sin(t * 5) * 0.18 : (mood === "chill" ? Math.sin(t * 0.9) * 0.08 : 0);
+
+  // ---- 表情
+  let eyes = "open";
+  if (sleep) eyes = since < 0.8 && react.kind === "stir" ? "half" : "sleep";
+  else if (holding || mood === "happy") eyes = "happy";
+  else if (mood === "tired") eyes = "half";
+  else if (angry) eyes = "half";
+  if (since < dur && !sleep) {
+    if (react.kind === "hit") eyes = since < 0.25 ? "wide" : "sleep";
+    else if (react.kind === "bow") eyes = "sleep";
+    else eyes = since < 0.35 && react.kind !== "eat" && react.kind !== "love" ? "wide" : "happy";
+  }
+  if (!sleep && eyes !== "happy" && t > blinkAt) { eyes = "sleep"; if (t > blinkAt + 0.13) blinkAt = t + 2 + Math.random() * 3.5; }
+  // 累的时候偶尔打哈欠
+  let yawning = false;
+  if (mood === "tired" && !holding) {
+    if (t > yawnAt) { yawning = true; eyes = "sleep"; if (t > yawnAt + 1.6) yawnAt = t + 6 + Math.random() * 6; }
+  }
+  P.setEyes(eyes);
+  P.yawn.visible = yawning;
+  if (react.kind === "eat" && since < dur) { P.yawn.visible = true; P.yawn.scale.setScalar(0.3 + Math.abs(Math.sin(since * 14)) * 0.9); }
+  if (yawning) P.yawn.scale.setScalar(0.6 + Math.sin(Math.min(1, (t - yawnAt) / 1.6) * Math.PI) * 0.8);
+  P.blushMat.opacity = holding || (react.kind === "blush" && since < 2) ? 0.95 : 0.55;
+
+  // ---- 手、耳朵、尾巴
+  const waving = react.kind === "wave" && since < 1.6;
+  P.arms.forEach((a, i) => {
+    const s = i ? 1 : -1;
+    const base = s * (kind === "cat" ? 0.25 : 0.35);
+    if (waving && i === 1) a.rotation.z = 2.4 + Math.sin(t * 14) * 0.4;
+    else if (mood === "happy" && !sleep) a.rotation.z = base + s * (0.3 + Math.sin(t * 8 + i) * 0.25);
+    else a.rotation.z = lerp(a.rotation.z, base, 0.2);
+  });
+  P.ears.forEach((e, i) => {
+    const twitch = Math.sin(t * 0.7 + i * 2) > 0.97 ? 0.25 : 0;
+    e.rotation.x = mood === "tired" || sleep ? 0.35 : -twitch;
+  });
+  const wag = mood === "happy" || holding ? 7 : 2.2;
+  P.tail.rotation.y = Math.sin(t * wag) * (sleep ? 0.08 : 0.35);
+
+  // ---- 鼻涕泡、汗滴
+  if (sleep) {
+    const camLocal = bed.worldToLocal(camera.getWorldPosition(new THREE.Vector3()));
+    if (Math.abs(camLocal.z) > 1.5) lieSide = camLocal.z > 0 ? 1 : -1;
+    P.root.quaternion.slerp(tmpQ.copy(bedQ).multiply(LIE[lieSide]), 0.04);
+    const b = (t * 0.45) % 1;
+    const popped = react.kind === "stir" && since < 1.5;
+    P.bubble.visible = !popped;
+    P.bubble.scale.setScalar(0.4 + Math.sin(b * Math.PI) * 1.2);
+  }
+  P.sweat.visible = (mood === "tired" || angry) && !sleep;
+  if (P.sweat.visible) P.sweat.position.y = 0.2 + Math.sin(t * 2.5) * 0.03;
+
+  // ---- 水晶
+  const head = headWorld();
+  world.worldToLocal(head);
+  crystalWrap.position.set(head.x - 0.1, head.y + (sleep ? 0.55 : 0.68) + Math.sin(t * 2) * 0.06, head.z - 0.16);
+  crystal.rotation.y = t * 1.2;
+
+  // ---- 花
+  for (const x of flowerList) {
+    x.open += (x.target - x.open) * 0.05;
+    x.bloom.scale.setScalar(Math.max(0.001, x.open));
+    x.bud.visible = x.open < 0.5;
+    x.f.rotation.z = Math.sin(t * 1.5 + x.f.userData.phase) * 0.08;
+  }
+  syncFlowers();
+
+  // ---- Zzz / 星星 / 爱心
+  zzz.forEach((s, i) => {
+    s.visible = sleep;
+    if (!sleep) return;
+    const p = (t * 0.32 + i / 3) % 1;
+    s.position.set(head.x + 0.2 + p * 0.4, head.y + 0.2 + p * 0.8, head.z + 0.07);
+    s.material.opacity = Math.sin(p * Math.PI);
+    s.scale.setScalar(0.15 + p * 0.17);
+  });
+  sparks.forEach((s, i) => {
+    s.visible = mood === "happy";
+    if (!s.visible) return;
+    const a = t * 0.8 + (i / sparks.length) * Math.PI * 2;
+    s.position.set(P.root.position.x + Math.cos(a) * 0.75, 0.3 + (i % 3) * 0.3 + Math.sin(t * 2 + i) * 0.07, P.root.position.z + Math.sin(a) * 0.75);
+    const tw = Math.sin(t * 4 + i * 1.7) * 0.5 + 0.5;
+    s.material.opacity = tw; s.scale.setScalar(0.11 + tw * 0.1);
+  });
+  if ((holding || (react.kind === "love" && since < dur)) && t - holdHeartTimer > 0.35) {
+    holdHeartTimer = t;
+    const s = floatHearts.find((h) => t - h.userData.t0 > 1.4);
+    if (s) { s.userData.t0 = t; s.userData.dx = (Math.random() - 0.5) * 0.6; }
+  }
+  floatHearts.forEach((s) => {
+    const p = (t - s.userData.t0) / 1.4;
+    s.visible = p >= 0 && p < 1;
+    if (!s.visible) return;
+    s.position.set(head.x + s.userData.dx * 0.65, head.y + 0.25 + p * 0.6, head.z + 0.13);
+    s.material.opacity = Math.sin(p * Math.PI);
+    s.scale.setScalar(0.15 + p * 0.08);
+  });
+}
+function lerpAngle(a, b, k) {
+  let d = ((b - a + Math.PI) % (Math.PI * 2)) - Math.PI;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return a + d * k;
+}
+
+function loop(now) {
+  requestAnimationFrame(loop);
+  if (!visible || document.hidden) return;
+  if (!PERF_MAX && now - last < 1000 / 45) return; // 最多 45fps，省电
+  const gap = now - last;
+  last = now;
+  const t = clock.getElapsedTime();
+  const dt = Math.min(0.1, t - lastT);
+  lastT = t;
+  if (warming) return; // 正在后台编新着色器：这几帧先不画
+  if (life3d && life3d.inside()) { life3d.renderInside(t, dt); adapt(gap, now); return; } // 在小木屋里：只画室内
+  const c0 = performance.now();
+  animate(REDUCED ? 0 : t, dt);
+  batcher.tick(t);
+  focusCamera();
+  controls.update();
+  const c1 = performance.now();
+  balanceLights();
+  renderer.render(scene, camera);
+  if (PERF) perfTick(gap, c1 - c0, performance.now() - c1);
+  adapt(gap, now);
+}
+
+// 自动画质：连续两段（每段 3 秒）实际帧率低于 24，就降一档。只降不升（避免来回跳）；
+// 记在本机，下次打开从"上次那档往回升一档"开始，重新试一下。像素模式是用户自己选的，不管。
+const QUALITY = [
+  { dpr: 2, shadow: 1024 },
+  { dpr: 1.5, shadow: 1024 },
+  { dpr: 1.25, shadow: 512 },
+  { dpr: 1, shadow: 0 },
+];
+let quality = Math.max(0, Math.min(QUALITY.length - 1, (parseInt(store.get("nest.q"), 10) || 0) - 1));
+if (params.has("q")) quality = Math.max(0, Math.min(QUALITY.length - 1, parseInt(params.get("q"), 10) || 0));
+let qWin = { n: 0, t0: 0, bad: 0 }, qGrace = performance.now() + 6000;
+function applyQuality(doResize = true) {
+  const q = QUALITY[quality];
+  if (q.shadow) {
+    sun.castShadow = true;
+    if (sun.shadow.mapSize.x !== q.shadow) {
+      sun.shadow.mapSize.set(q.shadow, q.shadow);
+      if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+    }
+  } else sun.castShadow = false;
+  if (doResize) resize();
+}
+function adapt(gap, now) {
+  if (pixelMode || PERF_MAX || params.has("q") || quality >= QUALITY.length - 1) return;
+  if (gap > 250 || now < qGrace) { qWin = { n: 0, t0: now, bad: qWin.bad }; return; } // 刚回到页面 / 刚加载（编译 shader）不算
+  if (!qWin.t0) qWin.t0 = now;
+  qWin.n++;
+  if (now - qWin.t0 < 3000) return;
+  const fps = (qWin.n * 1000) / (now - qWin.t0);
+  qWin.bad = fps < 24 ? qWin.bad + 1 : 0;
+  qWin.n = 0; qWin.t0 = now;
+  if (qWin.bad >= 2) {
+    quality++; qWin.bad = 0; qGrace = now + 4000;
+    store.set("nest.q", String(quality));
+    applyQuality();
+  }
+}
+if (quality) applyQuality(false); // 上次在这台设备上降过档（尺寸等文件末尾的 resize() 统一设）
+
+// ?perf：右上角显示帧率 / 绘制次数 / 三角形数（?perf=max 不限 45fps，看极限）。平时不开，零开销。
+const PERF = params.has("perf"), PERF_MAX = params.get("perf") === "max";
+if (PERF) { window.__scene = scene; window.__renderer = renderer; } // 只在 ?perf 下暴露，方便在控制台拆分开销
+let perfBox = null, perfAcc = { n: 0, gap: 0, js: 0, rd: 0 };
+function perfTick(gap, js, rd) {
+  const a = perfAcc;
+  a.n++; a.gap += gap; a.js += js; a.rd += rd;
+  if (a.n < 30) return;
+  const i = renderer.info, m = { meshes: 0, visible: 0 };
+  scene.traverse((o) => { if (o.isMesh || o.isPoints || o.isSprite || o.isLine) { m.meshes++; if (o.visible) m.visible++; } });
+  window.__perf = {
+    fps: +(1000 / (a.gap / a.n)).toFixed(1), jsMs: +(a.js / a.n).toFixed(2), renderCpuMs: +(a.rd / a.n).toFixed(2),
+    calls: i.render.calls, tris: i.render.triangles, programs: i.programs.length,
+    geometries: i.memory.geometries, textures: i.memory.textures, objects: m.meshes,
+    px: [renderer.domElement.width, renderer.domElement.height], dpr: renderer.getPixelRatio(), quality, batch: batcher.stats,
+  };
+  if (!perfBox) { perfBox = document.createElement("pre"); perfBox.style.cssText = "position:absolute;top:6px;right:6px;margin:0;padding:4px 6px;font:10px/1.3 monospace;background:#0009;color:#fff;border-radius:6px;pointer-events:none;z-index:5"; host.appendChild(perfBox); }
+  const p = window.__perf;
+  perfBox.textContent = `${p.fps} fps  js ${p.jsMs}ms  render ${p.renderCpuMs}ms\ncalls ${p.calls}  tris ${(p.tris / 1000).toFixed(0)}k\nprog ${p.programs}  geo ${p.geometries}  tex ${p.textures}  obj ${p.objects}\nq${quality} dpr ${p.dpr}  batch ${p.batch ? p.batch.meshes + "→" + p.batch.draws : "…"}`;
+  perfAcc = { n: 0, gap: 0, js: 0, rd: 0 };
+}
+
+// 镜头：平时是全景慢慢转；钓鱼时转到码头的斜侧面；两只角色互动 / 扭蛋 / 浇水时推近成特写，结束后再慢慢退回去
+const DOCK_VIEW = Math.atan2(-DOCK.dir.z + 0.7 * DOCK.dir.x, DOCK.dir.x + 0.7 * DOCK.dir.z);
+const baseTarget = controls.target.clone(), dockTarget = DOCK.base.clone().lerp(DOCK.tip, 0.55).setY(0.2), poolTarget = new THREE.Vector3(POOL.x, 0.35, POOL.z);
+let baseDist = 16, narrow = false, focusReq = null, wasActive = false;
+function setFocus(get, dist = 7.5, sec = 0) {
+  focusReq = { get: typeof get === "function" ? get : () => get, dist, until: sec ? performance.now() + sec * 1000 : Infinity };
+}
+function clearFocus() { focusReq = null; }
+function focusCamera() {
+  const ff = cast ? cast.fishFocus() : null, fishing = !!ff;
+  if (focusReq && performance.now() > focusReq.until) focusReq = null;
+  if (edit) { wasActive = true; return; }
+  let wantT = baseTarget, wantD = baseDist, wantTh = null;
+  if (ff === "pool") { wantT = poolTarget; wantD = baseDist * 0.62; }
+  else if (fishing) { wantT = dockTarget; wantD = baseDist * 0.8; wantTh = DOCK_VIEW; }
+  else if (focusReq) {
+    const p = focusReq.get();
+    if (p) { wantT = new THREE.Vector3(p.x, Math.max(0.35, p.y), p.z); wantD = focusReq.dist * (narrow ? 1.3 : 1); }
+  }
+  let follow = false;
+  if (!fishing && !focusReq) {
+    wantD = baseDist * userZoom;
+    // 拉近了：镜头跟着自己的角色（他是小恐龙，她是小猫），越近跟得越紧
+    if (userZoom < 0.8) {
+      const k = cast && window.NEST_WHO === "her" ? (cast.kitten.root || cast.kitten) : pet && pet.root;
+      if (k) { follow = true; wantT = new THREE.Vector3(k.position.x, 0.55, k.position.z).lerp(baseTarget, Math.max(0, (userZoom - 0.4) / 0.4) * 0.5); }
+    }
+  }
+  const active = fishing || !!focusReq || follow;
+  if (active) { controls.autoRotate = false; clearTimeout(resumeTimer); }
+  const off = camera.position.clone().sub(controls.target);
+  let r = off.length();
+  const ph = Math.acos(Math.max(-1, Math.min(1, off.y / r)));
+  let th = Math.atan2(off.x, off.z);
+  if (wantTh != null) th = lerpAngle(th, wantTh, 0.03);
+  controls.target.lerp(wantT, active ? 0.07 : 0.035);
+  r += (wantD - r) * (active ? 0.07 : 0.035);
+  camera.position.copy(controls.target).add(new THREE.Vector3(Math.sin(ph) * Math.sin(th), Math.cos(ph), Math.sin(ph) * Math.cos(th)).multiplyScalar(r));
+  if (wasActive && !active && userZoom > 0.98) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 4000);
+  wasActive = active;
+}
+
+/* ---------------------------------------------------------------- buttons */
+const btn = document.getElementById("px-toggle");
+function syncBtn() { if (btn) btn.textContent = pixelMode ? "像素" : "高清"; }
+if (btn) btn.addEventListener("click", () => { pixelMode = !pixelMode; store.set("nest.pixel", pixelMode ? "px" : "hd"); syncBtn(); resize(); });
+syncBtn();
+document.querySelectorAll("[data-species]").forEach((b) => b.addEventListener("click", () => {
+  if (b.dataset.species === kind) return;
+  setSpecies(b.dataset.species);
+  react = { kind: "jump", t0: clock.elapsedTime };
+}));
+
+/* ---------------------------------------------------------------- 她的小猫 + 小马、钓鱼（cast3d.js，加载失败也不影响别的） */
+let cast = null, extras = null, play = null, life3d = null, lastBook = {};
+const dinoApi = {
+  root: () => pet.root, parts: () => pet, scale: () => PET_SCALE, home: () => home.clone(),
+  sleeping: () => mood === "sleep",
+  react: (k) => { react = { kind: k, t0: clock.elapsedTime, dir: Math.random() < 0.5 ? -1 : 1 }; },
+  face: (fn) => { faceFn = fn; },
+  go: (p) => new Promise((res) => {
+    if (mood === "sleep") { res(); return; }
+    walkTo.copy(p).setY(0); arriveCb = res;
+  }),
+};
+const castReady = import("./cast3d.js?v=16").then(({ createCast }) => {
+  cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
+  castActors.push(cast.kitten.root, cast.pony.root);
+  castShadows();
+  return cast;
+}).catch((e) => { console.warn("cast3d", e); return null; });
+
+/* ---------------------------------------------------------------- 布置模式：点一件装饰选中，拖到草地上任意位置，↻ 转 45° */
+let edit = null;
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const selRing = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.68, 40), new THREE.MeshBasicMaterial({ color: 0xff7aa2, transparent: true, opacity: 0.85, depthWrite: false }));
+selRing.rotation.x = -Math.PI / 2;
+selRing.visible = false;
+selRing.raycast = () => {};
+world.add(selRing);
+function editSelect(g) {
+  edit.sel = g;
+  selRing.visible = !!g;
+  if (g) selRing.position.set(g.position.x, 0.03, g.position.z);
+  dispatchEvent(new CustomEvent("nest:edit-select", { detail: { item: g ? g.userData.item : null } }));
+}
+function editDown(e) {
+  const hit = pick(e);
+  const g = hit && hit.object.userData.what === "decor" ? decor.group(hit.object.userData.item) : null;
+  if (g) { editSelect(g); edit.drag = true; g.userData.editing = true; controls.enabled = false; }
+  else editSelect(null);
+}
+function editMove(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const p = ray.ray.intersectPlane(groundPlane, new THREE.Vector3());
+  if (!p) return;
+  world.worldToLocal(p);
+  // 只能放在草地平地上（不能放进河里、崖上、海里）
+  if (Math.abs(W.heightAt(p.x, p.z)) > 0.02 || Math.hypot(p.x, p.z) > 4.2) return;
+  edit.sel.position.set(p.x, 0, p.z);
+  selRing.position.set(p.x, 0.03, p.z);
+  edit.changed[edit.sel.userData.item] = true;
+}
+function editUp() { if (edit) { edit.drag = false; controls.enabled = true; } }
+
+/* ---------------------------------------------------------------- 给 social.js 用的接口 */
+window.NEST3D = {
+  react(k) { react = { kind: k, t0: clock.elapsedTime, dir: Math.random() < 0.5 ? -1 : 1 }; },
+  setAngry(on) { angry = !!on; if (pet && pet.bandage) pet.bandage.visible = angry; },
+  setFlowers(n) { vase.visible = n > 0; roses.forEach((r, i) => { r.visible = i < n; }); },
+  headScreen() { return pet ? screenOf(headWorld()) : null; },
+  setDecor: (list) => decor.setDecor(list),
+  setSnow: (on) => decor.setSnow(on),
+  setLevel: (n) => decor.setLevel(n),
+  hasDecor: (id) => decor.has(id),
+  castReady,
+  play: (kind, who, item) => (cast ? cast.play(kind, who, item) : Promise.resolve()),
+  setHer: (st) => cast && cast.setState(st),
+  fish: (who, request, opts) => (cast ? cast.fish(who, request, opts) : opts && opts.derby ? Promise.resolve(null) : request()),
+  leaveDock: (who) => cast && cast.leaveDock(who),
+  pullFish: () => cast && cast.pull(),
+  fishSpot: () => (cast ? cast.localSpot() : null),
+  fishBusy: () => !!(cast && cast.localBusy()),
+  leaveFish: () => (cast ? cast.leaveLocal() : Promise.resolve()),
+  fishing: (actor) => !!(cast && cast.fishing(actor)),
+  setBook: (b) => { lastBook = b || {}; if (cast) cast.setBook(b); },
+  // v15 小岛生活：宠物 / 岛民 / 小船 / 突发事件 / 远方小岛 / 小木屋室内 / 拍照
+  lifeReady: castReady.then(() => warmUp()).then(idle).then(async () => {
+    try {
+      const { createLife3D } = await import("./life3d.js?v=16");
+      life3d = createLife3D({ scene, world, camera, renderer, controls, toon, outlined, W, DOCK, SEA_Y, decor, screenOf, setFocus, clearFocus, walkable, textSprite,
+        isNight: () => skyKind === "night", bookIds: () => Object.keys(lastBook) });
+      castShadows();
+      if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__life3d = life3d; // 本地测试用
+      await warmUp();
+      dispatchEvent(new CustomEvent("nest:lifeready"));
+    } catch (e) { console.warn("life3d", e); }
+    return life3d;
+  }),
+  setLife: (s, who) => life3d && life3d.setState(s, who),
+  enterHome: () => (life3d ? life3d.enter() : Promise.resolve()),
+  exitHome: () => (life3d ? life3d.exit() : undefined),
+  lifeFx: (k, d) => life3d && life3d.fx(k, d),
+  homeFocus: (id) => life3d && life3d.homeFocus(id),
+  setHomePhotos: (urls) => life3d && life3d.setHomePhotos(urls),
+  fishThumbs: (ids, opts) => (life3d ? life3d.fishThumbs(ids, opts) : Promise.resolve(new Map())),
+  petLooks: () => life3d && life3d.petLooks(),
+  setPhotoMode: (on) => life3d && life3d.setPhotoMode(on),
+  snapshot: () => (life3d ? life3d.snapshot(() => { if (life3d.inside()) life3d.renderInside(clock.getElapsedTime(), 0); else renderer.render(scene, camera); }) : null),
+  setSpecies: (k) => { if (k && k !== kind && KINDS[k]) setSpecies(k); },
+  species: () => kind,
+  // 第五版：扭蛋 / 菜地 / 圣诞 / 换装 / 天气 / 布置
+  extrasReady: castReady.then(async (c) => {
+    await window.NEST3D.lifeReady; await idle(); // 一个一个来，别挤在同一帧里初始化
+    try {
+      const { createExtras } = await import("./extras3d.js?v=16");
+      extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
+      await warmUp();
+    } catch (e) { console.warn("extras", e); }
+    return extras;
+  }),
+  gachaSpin: (r) => (extras ? extras.gachaSpin(r) : (dispatchEvent(new CustomEvent("nest:gacha-reveal", { detail: r })), Promise.resolve())),
+  setFarm: (st) => extras && extras.setFarm(st),
+  farmWater: (i) => (extras ? extras.farmWater(i) : Promise.resolve()),
+  farmHarvest: (i, emoji) => (extras ? extras.farmHarvest(i, emoji) : Promise.resolve()),
+  setXmas: (on) => extras && extras.setXmas(on),
+  setOutfits: (m) => extras && extras.setOutfits(m),
+  setWorld: (st) => extras && extras.setWorld(st),
+  setDecorPos: (m) => decor.setPositions(m),
+  // 小游戏：藏宝 / 钓鱼大赛 / 默契罐
+  playReady: castReady.then(async (c) => {
+    if (!c) return null;
+    await window.NEST3D.extrasReady; await idle();
+    try {
+      const { createPlay } = await import("./play3d.js?v=16");
+      play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
+      castShadows();
+      await warmUp();
+      dispatchEvent(new CustomEvent("nest:playready")); // 游戏状态可能比这里先到，让 social.js 再同步一次
+    } catch (e) { console.warn("play3d", e); }
+    return play;
+  }),
+  setGames: (g, me, names) => play && play.setGames(g, me, names),
+  setTapMode(fn) { tapMode = fn || null; if (fn) controls.autoRotate = false; else resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000); },
+  localDig: (who, x, z, resultP) => (play ? play.localDig(who, x, z, resultP) : resultP),
+  digAt: (who, x, z) => (play ? play.digAt(who, x, z) : Promise.resolve()),
+  rpsReveal: (round) => (play ? play.rpsReveal(round) : Promise.resolve()),
+  remoteDigs: (who, list, end) => (play ? play.remoteDigs(who, list, end) : Promise.resolve()),
+  revealChest: (x, z, o) => (play ? play.revealChest(x, z, o) : Promise.resolve()),
+  buryChest: (who, x, z) => (play ? play.buryChest(who, x, z) : Promise.resolve()),
+  previewHide: (p) => play && play.previewHide(p),
+  huntLook: (x, z) => play && play.lookAt(x, z),
+  mapInfo: MAP,
+  screenAt: (x, y, z) => screenOf(world.localToWorld(new THREE.Vector3(x, y, z))), // 小岛坐标 → 屏幕坐标
+  editStart() { edit = { sel: null, drag: false, changed: {} }; controls.autoRotate = false; },
+  editRotate() { if (edit && edit.sel) { edit.sel.rotation.y += Math.PI / 4; edit.changed[edit.sel.userData.item] = true; } },
+  editStop() {
+    if (!edit) return {};
+    const out = {};
+    for (const id of Object.keys(edit.changed)) {
+      const g = decor.group(id);
+      if (g) { out[id] = encodePos(g.position.x, g.position.z, g.rotation.y); g.userData.editing = false; }
+    }
+    for (const g of decor.groups()) g.userData.editing = false;
+    edit = null; selRing.visible = false; controls.enabled = true;
+    resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000);
+    return out;
+  },
+  editing: () => !!edit,
+  // 对方的角色走到某处（实时同步来的）
+  remoteWalk(who, x, z) {
+    const p = walkable(new THREE.Vector3(x, 0, z));
+    if (who === "her") { if (cast) cast.walkHer(p); }
+    else if (mood !== "sleep") walkTo.copy(p);
+  },
+};
+
+/* ---------------------------------------------------------------- boot */
+setSpecies(kind);
+update();
+resize();
+// 先在后台把着色器编好再开始画（手机支持并行编译时不卡界面），最多等 4 秒
+balanceLights();
+warmUp(6000).then(() => {
+  requestAnimationFrame(loop);
+  sceneEl.classList.add("has3d");
+  sceneEl.classList.remove("loading3d");
+});
+decor.loadCatalog().finally(() => dispatchEvent(new Event("nest:3dready")));
+setInterval(() => { extraCasters.length = 0; world.children.forEach((c) => { if (c.userData.item) extraCasters.push(c); }); castShadows(); }, 3000);
+setTimeout(() => document.getElementById("hint")?.classList.add("gone"), 9000);
