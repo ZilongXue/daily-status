@@ -4,13 +4,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
-import { buildPet, SPECIES } from "./pet3d.js?v=16";
-import { buildDino } from "./dino3d.js?v=16";
-import { createDecor, encodePos } from "./decor3d.js?v=16";
-import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=16";
-import { MAP, POOL } from "./island3d.js?v=16";
-import { createBatcher } from "./batch3d.js?v=16";
-import { glowSprite, season } from "./home3d.js?v=16";
+import { buildPet, SPECIES } from "./pet3d.js?v=17";
+import { buildDino } from "./dino3d.js?v=17";
+import { createDecor, encodePos } from "./decor3d.js?v=17";
+import { createWorld, ISLAND_R, SEA_Y, DOCK } from "./world3d.js?v=17";
+import { MAP, POOL } from "./island3d.js?v=17";
+import { createBatcher } from "./batch3d.js?v=17";
+import { glowSprite, season } from "./home3d.js?v=17";
 
 const KINDS = { dino: "小恐龙", ...Object.fromEntries(Object.entries(SPECIES).map(([k, v]) => [k, v.name])) };
 
@@ -71,7 +71,7 @@ controls.autoRotateSpeed = 0.5;
 renderer.domElement.style.touchAction = "pan-y"; // 竖着划照常滚动页面，横着划转小岛
 let resumeTimer = 0;
 controls.addEventListener("start", () => { controls.autoRotate = false; clearTimeout(resumeTimer); });
-controls.addEventListener("end", () => { resumeTimer = setTimeout(() => { if (userZoom > 0.98) controls.autoRotate = !REDUCED; }, 6000); });
+controls.addEventListener("end", () => { resumeTimer = setTimeout(() => { if (userZoom > 0.98 && !viewTarget && !topDown) controls.autoRotate = !REDUCED; }, 6000); });
 
 /* ---------------------------------------------------------------- materials */
 const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
@@ -461,7 +461,7 @@ const GACHA_IDS = new Set(["paper_lantern", "pinwheel", "mushroom_lamp", "bird_h
   "xmas_tree", "reindeer", "gingerbread", "snow_family", "candy_lane"]);
 const decor = createDecor({ world, toon, outlined, tag, tree, top, leaves, getPet: () => pet, extra: {
   has: (id) => GACHA_IDS.has(id),
-  build: async (id) => (await import("./gacha3d.js?v=16")).buildGachaDecor(id, { toon, outlined }),
+  build: async (id) => (await import("./gacha3d.js?v=17")).buildGachaDecor(id, { toon, outlined }),
 } });
 
 /* ---------------------------------------------------------------- state from data */
@@ -574,7 +574,7 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
   touches.set(e.pointerId, [e.clientX, e.clientY]);
   if (touches.size === 2) {
     const [a, b] = [...touches.values()];
-    pinch = { d0: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, z0: userZoom };
+    pinch = { d0: Math.hypot(a[0] - b[0], a[1] - b[1]) || 1, z0: userZoom, c: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] };
     clearTimeout(holdTimer); stopHold(); downAt = null;
   }
 }, true);
@@ -584,8 +584,20 @@ renderer.domElement.addEventListener("pointermove", (e) => {
   if (pinch && touches.size >= 2) {
     const [a, b] = [...touches.values()];
     setZoom(pinch.z0 * pinch.d0 / (Math.hypot(a[0] - b[0], a[1] - b[1]) || 1));
+    // 两指一起挪 = 平移镜头
+    const c = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    panBy(c[0] - pinch.c[0], c[1] - pinch.c[1]);
+    pinch.c = c;
   }
 });
+// 鼠标右键 / Shift + 左键拖 = 平移（电脑上）
+let mousePan = null;
+renderer.domElement.addEventListener("contextmenu", (e) => e.preventDefault());
+renderer.domElement.addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "mouse" && (e.button === 2 || e.shiftKey)) { mousePan = [e.clientX, e.clientY]; controls.enabled = false; downAt = null; }
+}, true);
+addEventListener("pointermove", (e) => { if (mousePan) { panBy(e.clientX - mousePan[0], e.clientY - mousePan[1]); mousePan = [e.clientX, e.clientY]; } });
+addEventListener("pointerup", () => { if (mousePan) { mousePan = null; if (!edit) controls.enabled = true; } });
 const liftTouch = (e) => { touches.delete(e.pointerId); if (pinch) { downAt = null; if (touches.size < 2) pinch = null; } };
 renderer.domElement.addEventListener("pointerup", liftTouch, true);
 renderer.domElement.addEventListener("pointercancel", liftTouch, true);
@@ -594,16 +606,64 @@ renderer.domElement.addEventListener("wheel", (e) => {
   e.preventDefault();
   setZoom(userZoom * Math.exp(e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
 }, { passive: false });
-let tapMode = null;
+// 视角（v17）：viewTarget = 用户自己挪到 / 双击飞到的看点（null = 看岛中心）；tiltReq = 想要的俯仰角（越小越俯视）；
+// topDown = 挖宝时自动俯视；follow = 镜头跟着自己的角色
+let viewTarget = null, tiltReq = null, topDown = false, followMe = false, tiltBase = 1.13;
+const ISLAND_PAN = 4.2;
+function panBy(dx, dy) {
+  const h = host.clientHeight || 400;
+  const dist = camera.position.distanceTo(controls.target);
+  const k = (2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2))) / h; // 每个像素对应多少米
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).setY(0).normalize();
+  const fwd = new THREE.Vector3(-right.z, 0, right.x); // 屏幕"往上"在地面上的方向
+  const base = (viewTarget || controls.target).clone();
+  base.addScaledVector(right, -dx * k).addScaledVector(fwd, -dy * k * 1.4);
+  const flat = new THREE.Vector2(base.x - baseTarget.x, base.z - baseTarget.z);
+  if (flat.length() > ISLAND_PAN) flat.setLength(ISLAND_PAN);
+  viewTarget = new THREE.Vector3(baseTarget.x + flat.x, 0.35, baseTarget.z + flat.y);
+  followMe = false;
+  controls.autoRotate = false; clearTimeout(resumeTimer);
+}
+// 俯仰范围：沉浸模式 / 电脑上可以上下拖调俯仰；普通模式手机上竖着划是滚页面，所以锁住（俯视按钮、挖宝时例外）
+function tiltFree() { return document.body.classList.contains("immersive") || matchMedia("(pointer: fine)").matches; }
+function applyPolar() {
+  if (topDown) { controls.minPolarAngle = 0.3; controls.maxPolarAngle = tiltFree() ? 1.25 : 0.42; return; }
+  if (tiltFree()) { controls.minPolarAngle = 0.3; controls.maxPolarAngle = 1.25; }
+  else if (tiltReq != null) { controls.minPolarAngle = Math.min(tiltBase, tiltReq); controls.maxPolarAngle = Math.max(tiltBase, tiltReq); }
+  else controls.minPolarAngle = controls.maxPolarAngle = tiltBase;
+}
+function setView(kind) {
+  if (kind === "all") { viewTarget = null; followMe = false; setZoom(1); tiltReq = tiltBase; topDown = false; }
+  if (kind === "top") { viewTarget = null; followMe = false; setZoom(0.95); tiltReq = 0.36; topDown = true; }
+  if (kind === "me") { viewTarget = null; followMe = true; setZoom(0.55); tiltReq = Math.min(tiltBase, 0.95); topDown = false; }
+  applyPolar();
+  controls.autoRotate = false; clearTimeout(resumeTimer);
+  if (kind === "all") resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 5000);
+  syncViewBtns(kind);
+}
+function flyTo(p) {
+  viewTarget = new THREE.Vector3(p.x, Math.max(0.35, p.y || 0), p.z);
+  followMe = false;
+  if (userZoom > 0.62) setZoom(0.55);
+  controls.autoRotate = false; clearTimeout(resumeTimer);
+  syncViewBtns(null);
+}
+addEventListener("nest:view", () => applyPolar());
+let tapMode = null, lastTap = null;
 const tapPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 function groundPoint(e) {
   const r = renderer.domElement.getBoundingClientRect();
   ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
   ray.setFromCamera(ndc, camera);
+  // 先打真实地形（岛后面高低不平，按 y=0 平面算会偏），打不到再用平面
+  groundMeshes ||= tappables.filter((o) => o.userData.what === "ground");
+  const th = ray.intersectObjects(groundMeshes, true)[0];
+  if (th) return world.worldToLocal(th.point.clone());
   const hit = new THREE.Vector3();
   if (!ray.ray.intersectPlane(tapPlane, hit)) return null;
   return world.worldToLocal(hit);
 }
+let groundMeshes = null;
 addEventListener("pointerup", () => { clearTimeout(holdTimer); if (holding) { stopHold(); downAt = null; } });
 renderer.domElement.addEventListener("pointerup", (e) => {
   if (edit) { editUp(); return; }
@@ -613,6 +673,15 @@ renderer.domElement.addEventListener("pointerup", (e) => {
   if (life3d && life3d.inside()) { if (!moved) life3d.tapInside(e); return; }
   if (moved) return;
   if (cast && cast.pull()) return;
+  // 双击：镜头飞过去（拉近看那一块）
+  const nowT = performance.now();
+  if (lastTap && nowT - lastTap.t < 320 && Math.hypot(e.clientX - lastTap.x, e.clientY - lastTap.y) < 36 && !tapMode) {
+    lastTap = null;
+    const gp = groundPoint(e);
+    if (gp) flyTo(gp);
+    return;
+  }
+  lastTap = { t: nowT, x: e.clientX, y: e.clientY };
   if (tapMode) { // 小游戏（藏宝）：点到哪就是草地上的哪一点，不管点中的是树还是装饰
     const p = groundPoint(e);
     if (p) tapMode(walkable(p), { x: e.clientX, y: e.clientY });
@@ -690,7 +759,8 @@ function resize() {
   const aspect = w / h, tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
   const tall = aspect < 0.8;
   baseDist = Math.max(9.2 / (2 * tan), (tall ? 10.6 : 11.2) / (2 * tan * aspect));
-  controls.minPolarAngle = controls.maxPolarAngle = tall ? 0.98 : 1.13;
+  tiltBase = tall ? 0.98 : 1.13;
+  applyPolar();
   narrow = w < 500;
   const off = camera.position.clone().sub(controls.target).setLength(baseDist);
   camera.position.copy(controls.target).add(off);
@@ -907,6 +977,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   if (!visible || document.hidden) return;
   if (!PERF_MAX && now - last < 1000 / 45) return; // 最多 45fps，省电
+  if (window.NEST_REEL && window.NEST_REEL.active() && now - last < 1000 / 12) return; // 收线小游戏时 3D 降到 12fps，把手机让给小游戏
   const gap = now - last;
   last = now;
   const t = clock.getElapsedTime();
@@ -1009,8 +1080,9 @@ function focusCamera() {
   let follow = false;
   if (!fishing && !focusReq) {
     wantD = baseDist * userZoom;
-    // 拉近了：镜头跟着自己的角色（他是小恐龙，她是小猫），越近跟得越紧
-    if (userZoom < 0.8) {
+    if (viewTarget) { wantT = viewTarget; follow = true; }
+    // 拉近了（或者点了"跟着我"）：镜头跟着自己的角色（他是小恐龙，她是小猫），越近跟得越紧
+    else if (userZoom < 0.8 || followMe) {
       const k = cast && window.NEST_WHO === "her" ? (cast.kitten.root || cast.kitten) : pet && pet.root;
       if (k) { follow = true; wantT = new THREE.Vector3(k.position.x, 0.55, k.position.z).lerp(baseTarget, Math.max(0, (userZoom - 0.4) / 0.4) * 0.5); }
     }
@@ -1019,15 +1091,25 @@ function focusCamera() {
   if (active) { controls.autoRotate = false; clearTimeout(resumeTimer); }
   const off = camera.position.clone().sub(controls.target);
   let r = off.length();
-  const ph = Math.acos(Math.max(-1, Math.min(1, off.y / r)));
+  let ph = Math.acos(Math.max(-1, Math.min(1, off.y / r)));
+  if (tiltReq != null) { ph += (tiltReq - ph) * 0.06; if (Math.abs(ph - tiltReq) < 0.004) { ph = tiltReq; tiltReq = null; applyPolar(); } }
+  ph = Math.max(controls.minPolarAngle, Math.min(controls.maxPolarAngle, ph));
   let th = Math.atan2(off.x, off.z);
   if (wantTh != null) th = lerpAngle(th, wantTh, 0.03);
   controls.target.lerp(wantT, active ? 0.07 : 0.035);
   r += (wantD - r) * (active ? 0.07 : 0.035);
   camera.position.copy(controls.target).add(new THREE.Vector3(Math.sin(ph) * Math.sin(th), Math.cos(ph), Math.sin(ph) * Math.cos(th)).multiplyScalar(r));
-  if (wasActive && !active && userZoom > 0.98) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 4000);
+  if (wasActive && !active && userZoom > 0.98 && !viewTarget && !topDown) resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 4000);
   wasActive = active;
 }
+
+/* ---------------------------------------------------------------- 视角按钮：全景 / 俯视 / 跟着我 */
+const viewBox = document.createElement("div");
+viewBox.className = "view-chips";
+viewBox.innerHTML = `<button type="button" data-view="all" title="全景">🏝</button><button type="button" data-view="top" title="俯视">🗺</button><button type="button" data-view="me" title="跟着我">🎯</button>`;
+sceneEl.appendChild(viewBox);
+viewBox.addEventListener("click", (e) => { const b = e.target.closest("[data-view]"); if (b) setView(b.dataset.view); });
+function syncViewBtns(k) { viewBox.querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.view === k)); }
 
 /* ---------------------------------------------------------------- buttons */
 const btn = document.getElementById("px-toggle");
@@ -1052,7 +1134,7 @@ const dinoApi = {
     walkTo.copy(p).setY(0); arriveCb = res;
   }),
 };
-const castReady = import("./cast3d.js?v=16").then(({ createCast }) => {
+const castReady = import("./cast3d.js?v=17").then(({ createCast }) => {
   cast = createCast({ world, toon, outlined, tag, W, DOCK, SEA_Y, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
   castActors.push(cast.kitten.root, cast.pony.root);
   castShadows();
@@ -1110,6 +1192,7 @@ window.NEST3D = {
   fish: (who, request, opts) => (cast ? cast.fish(who, request, opts) : opts && opts.derby ? Promise.resolve(null) : request()),
   leaveDock: (who) => cast && cast.leaveDock(who),
   pullFish: () => cast && cast.pull(),
+  setKing: (k) => cast && cast.setKing(k),
   fishSpot: () => (cast ? cast.localSpot() : null),
   fishBusy: () => !!(cast && cast.localBusy()),
   leaveFish: () => (cast ? cast.leaveLocal() : Promise.resolve()),
@@ -1118,7 +1201,7 @@ window.NEST3D = {
   // v15 小岛生活：宠物 / 岛民 / 小船 / 突发事件 / 远方小岛 / 小木屋室内 / 拍照
   lifeReady: castReady.then(() => warmUp()).then(idle).then(async () => {
     try {
-      const { createLife3D } = await import("./life3d.js?v=16");
+      const { createLife3D } = await import("./life3d.js?v=17");
       life3d = createLife3D({ scene, world, camera, renderer, controls, toon, outlined, W, DOCK, SEA_Y, decor, screenOf, setFocus, clearFocus, walkable, textSprite,
         isNight: () => skyKind === "night", bookIds: () => Object.keys(lastBook) });
       castShadows();
@@ -1144,7 +1227,7 @@ window.NEST3D = {
   extrasReady: castReady.then(async (c) => {
     await window.NEST3D.lifeReady; await idle(); // 一个一个来，别挤在同一帧里初始化
     try {
-      const { createExtras } = await import("./extras3d.js?v=16");
+      const { createExtras } = await import("./extras3d.js?v=17");
       extras = await createExtras({ world, toon, outlined, tag, W, cast: c, dino: dinoApi, textSprite, screenOf, setFocus, clearFocus });
       await warmUp();
     } catch (e) { console.warn("extras", e); }
@@ -1163,7 +1246,7 @@ window.NEST3D = {
     if (!c) return null;
     await window.NEST3D.extrasReady; await idle();
     try {
-      const { createPlay } = await import("./play3d.js?v=16");
+      const { createPlay } = await import("./play3d.js?v=17");
       play = createPlay({ world, toon, outlined, W, cast: c, dino: dinoApi, setFocus, clearFocus, DOCK });
       castShadows();
       await warmUp();
@@ -1172,7 +1255,13 @@ window.NEST3D = {
     return play;
   }),
   setGames: (g, me, names) => play && play.setGames(g, me, names),
-  setTapMode(fn) { tapMode = fn || null; if (fn) controls.autoRotate = false; else resumeTimer = setTimeout(() => { controls.autoRotate = !REDUCED; }, 3000); },
+  setTapMode(fn) {
+    const was = !!tapMode;
+    tapMode = fn || null;
+    if (fn && !was) setView("top"); // 挖宝：自动转成俯视，整片草地都看得到
+    else if (!fn && was) setView("all");
+  },
+  setView,
   localDig: (who, x, z, resultP) => (play ? play.localDig(who, x, z, resultP) : resultP),
   digAt: (who, x, z) => (play ? play.digAt(who, x, z) : Promise.resolve()),
   rpsReveal: (round) => (play ? play.rpsReveal(round) : Promise.resolve()),

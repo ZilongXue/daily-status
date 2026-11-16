@@ -31,7 +31,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { gamesGet, gamesPost, checkWishEvent, luckyFish } from "./games.js";
-import { lifeGet, lifePost, bagAdd, bagKeyForFish, fishEnv, catchable, rollWeighted, sizeOf } from "./life.js";
+import { lifeGet, lifePost, bagAdd, bagTake, bagKeyForFish, fishEnv, catchable, rollWeighted, sizeOf } from "./life.js";
 import { FISH } from "../../site/fishdata.js";
 import { PHOTO_LIMITS } from "../../site/lifedata.js";
 
@@ -152,7 +152,7 @@ export default {
       return json(r, r.error ? r.status || 400 : 200, cors);
     }
     if (url.pathname === "/games") {
-      const deps = { mint, bjDay, POOL, onCatch };
+      const deps = { mint, bjDay, onCatch, bagAdd, bagTake, dev: env.DEV === "1", fishEnv: async (who) => fishEnv(await world(env, ctx).catch(() => null), who) };
       if (req.method === "GET") {
         const who = url.searchParams.get("who");
         if (who !== "me" && who !== "her") return json({ error: "bad who" }, 400, cors);
@@ -593,7 +593,7 @@ async function world(env, ctx) {
     const c = cities[who];
     if (!c) continue;
     try {
-      const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&current=temperature_2m,weather_code,is_day&timezone=auto`, { headers: { "user-agent": "nest-api/1.0" } });
+      const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${c.lat}&longitude=${c.lon}&current=temperature_2m,weather_code,is_day&timezone=auto`, { headers: { "user-agent": "nest-api/1.0" }, signal: AbortSignal.timeout(4000) });
       const j = await r.json();
       out[who] = { label: c.label || "", offset: Math.round((j.utc_offset_seconds || 0) / 60), temp: Math.round(j.current.temperature_2m), code: j.current.weather_code, kind: WMO(j.current.weather_code), isDay: !!j.current.is_day };
     } catch { out[who] = null; }

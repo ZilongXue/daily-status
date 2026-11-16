@@ -1,10 +1,23 @@
 // 小岛生活（v15）的界面：背包、小屋（做饭 / 孵蛋 / 宠物 / 信箱 / 菜谱 / 相册）、岛民、出海、突发事件、拍照、图鉴 2.0。
 // 后端是 /life 和 /photos（worker/src/life.js、index.js），游戏数据和后端共用 lifedata.js / fishdata.js。
 // 依赖 social.js 挂出来的 window.NEST_SOCIAL（令牌、加解密、say、钱包…）和 scene3d.js 的 window.NEST3D（3D 那一侧）。
-import { FISH, FISH_IDS } from "./fishdata.js?v=16";
-import * as L from "./lifedata.js?v=16";
+import { FISH, FISH_IDS } from "./fishdata.js?v=17";
+import * as L from "./lifedata.js?v=17";
+import * as DB from "./derbydata.js?v=17";
 
 window.NEST_FISH = FISH;
+// 钓鱼大赛 2.0 的规则（social.js 是普通脚本，不能 import，从这里拿）
+window.NEST_DERBY = {
+  ...DB,
+  dish(key) { // 背包里的菜 → { name, emoji, bait }
+    const rid = (key || "").split(":")[1];
+    const r = rid === "dark" ? L.DARK_DISH : L.RECIPES[rid];
+    return r ? { name: r.name, emoji: r.emoji, bait: DB.TAG_BAIT[r.tag] || null } : null;
+  },
+  bag: () => (life && life.bag) || {},
+  refreshBag: () => refresh(),
+};
+dispatchEvent(new CustomEvent("nest:derbydata"));
 const S = window.NEST_SOCIAL;
 const R = () => window.NEST3D || {};
 const $ = (q, el = document) => el.querySelector(q);

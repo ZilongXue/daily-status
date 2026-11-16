@@ -1,11 +1,11 @@
 // 岛上的"演员"：她的小猫 + 小马（她的角色），两只角色之间的互动编排，钓鱼，和海里游的鱼（图鉴里钓到过的）。
 // scene3d.js 创建它并每帧调用 update；对外的接口挂在 window.NEST3D 上（见 scene3d.js 底部）。
 import * as THREE from "three";
-import { buildFish } from "./fishgen3d.js?v=16";
-import { FISH } from "./fishdata.js?v=16";
-import { POOL } from "./island3d.js?v=16";
-import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=16";
-import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=16";
+import { buildFish } from "./fishgen3d.js?v=17";
+import { FISH } from "./fishdata.js?v=17";
+import { POOL } from "./island3d.js?v=17";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js?v=17";
+import { buildCatch, animateCatch as swim, buildRod, buildBobber, bobberIdle, bobberBite, buildSchoolFish, schoolTick } from "./fish3d.js?v=17";
 
 const UP = new THREE.Vector3(0, 1, 0);
 const RARITY_COL = { common: 0xffffff, rare: 0x6fc3ff, epic: 0xc28bff, legend: 0xffcf3f };
@@ -365,13 +365,16 @@ export function createCast(ctx) {
     const who = whoReal === "me" && dino.sleeping() && !opts.derby ? "her" : whoReal;
     const sl = SLOTS[who];
     if (sl.state !== "idle") return null;
+    // 比赛里换钓点（码头 ⇄ 水潭）：先收竿走回去，再走到新地方
+    if (sl.atDock && opts.spot && (opts.spot === "pool") !== !!sl.atPool) await leaveDock(who);
+    if (sl.state !== "idle") return null;
     sl.state = "walking";
     sl.local = opts.local !== false;
     sl.session = !!opts.session; // 自己点的"连续钓"：钓完站在原地等下一竿
     if (who === "her" && S.riding) seatKitten(false);
     const go = (p) => (who === "her" ? move(her, p, 2.4) : dino.go(p));
     // 瀑布下的水潭（v15）：站在水潭靠草地这一边，浮漂落在水潭中间；钓完直接走回家
-    const pool = opts.spot === "pool" && !opts.derby;
+    const pool = opts.spot === "pool";
     if (pool && !sl.dockStand) {
       sl.dockStand = sl.stand; sl.dockBob = sl.bobTo;
       const toC = new THREE.Vector3(-POOL.x, 0, -POOL.z).normalize();
@@ -434,6 +437,7 @@ export function createCast(ctx) {
     sl.state = "reeling";
     sl.reelT = T;
     const it = buildFish(result.catch, { toon, outlined });
+    if (result.king) it.root.scale.multiplyScalar(2.2); // 鱼王：大一圈
     sl.caught = it;
     it.root.position.copy(sl.bobTo);
     world.add(it.root);
@@ -491,6 +495,23 @@ export function createCast(ctx) {
     const on = slotList.filter((sl) => sl.state !== "idle" || sl.atDock);
     if (!on.length) return null;
     return on.every((sl) => sl.atPool) ? "pool" : "dock";
+  }
+  // 钓鱼大赛的鱼王（v17）：浮出水面时，码头前的海里有一个大黑影绕圈游、时不时溅水花
+  const kingShadow = new THREE.Mesh(new THREE.CircleGeometry(1, 28), new THREE.MeshBasicMaterial({ color: 0x0b2236, transparent: true, opacity: 0, depthWrite: false }));
+  kingShadow.rotation.x = -Math.PI / 2; kingShadow.scale.set(0.95, 0.42, 1); kingShadow.visible = false; kingShadow.raycast = () => {};
+  kingShadow.userData.dynamic = true;
+  world.add(kingShadow);
+  let kingOn = false, kingSplash = 0;
+  function setKing(k) { kingOn = !!(k && k.up && !k.landed); }
+  function kingTick(t) {
+    const m = kingShadow.material;
+    m.opacity += ((kingOn ? 0.42 : 0) - m.opacity) * 0.05;
+    kingShadow.visible = m.opacity > 0.01;
+    if (!kingShadow.visible) return;
+    const a = t * 0.5, c = DOCK.bobber, r = 1.1;
+    kingShadow.position.set(c.x + Math.cos(a) * r, SEA_Y + 0.02, c.z + Math.sin(a) * r);
+    kingShadow.rotation.z = -a - Math.PI / 2;
+    if (kingOn && t > kingSplash) { W.splash(kingShadow.position.clone(), 1.2); kingSplash = t + 2.5 + Math.random() * 2; }
   }
   function pull() { for (const sl of slotList) if (sl.pull && sl.local) { sl.pull(); return true; } return false; }
 
@@ -606,6 +627,7 @@ export function createCast(ctx) {
 
   function update(t, dt, sky, cameraLocal) {
     T = t;
+    kingTick(t);
     for (let i = waits.length - 1; i >= 0; i--) if (t >= waits[i].at) { waits[i].res(); waits.splice(i, 1); }
 
     // ---- 闲逛：在线时小猫在家附近溜达，小马在草地上慢慢走
@@ -762,7 +784,7 @@ export function createCast(ctx) {
   }
 
   return {
-    update, play, setState, fish, pull, setBook, walkHer, leaveDock, localSpot, localBusy, leaveLocal, fishFocus,
+    update, play, setState, fish, pull, setBook, walkHer, leaveDock, setKing, localSpot, localBusy, leaveLocal, fishFocus,
     // 小游戏用：让小猫走到某处（返回到达的 promise）/ 朝向某处
     herGo: (p) => { if (S.riding) seatKitten(false); manualUntil = T + 25; her.face = null; return move(her, p, 1.6); },
     herFace: (fn) => { her.face = fn; },

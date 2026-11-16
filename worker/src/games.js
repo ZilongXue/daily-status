@@ -5,10 +5,15 @@
 // GET  /games?who=me|her        → 全部游戏状态（按 who 过滤掉不该看到的）
 // POST /games {who, game, op, ...}
 //   hunt  : hide {x, z, box?} / dig {x, z} / cancel
-//   derby : challenge / cast / reel {cid, react} / quit
+//   derby : challenge / cast {spot, bait} / hook {cid, react} / land {cid, ok, q, perfect} / release / quit
 //   quiz  : submit {self:[5], guess:[5]}
 // 愿望券：赢家拿到 wishgrant（服务器发），写内容走 POST /events kind=wish（item = grant 的 id，box = 密文），
 //         对方兑现后发 kind=wishdone（item = wish 的 id）。
+
+import { FISH } from "../../site/fishdata.js";
+import { RECIPES } from "../../site/lifedata.js";
+import { DERBY, TAG_BAIT, FREE_BAITS, KINGS, combosOf } from "../../site/derbydata.js";
+import { catchable, fishWeight } from "./life.js";
 
 export const GAME_KINDS = ["wish", "wishdone"];
 
@@ -98,108 +103,239 @@ async function hunt(env, b, deps) {
   return { error: "bad op", status: 400 };
 }
 
-// ---------------------------------------------------------------- 钓鱼大赛
-// 每人 5 竿，24 小时内打完（同时在线就一起钓，看得到对方实时的收获）。
-// 甩竿时服务器只定"多久咬钩"；拉竿时才抽鱼，所以提前看不到结果。拉得快（≤400ms）抽两次取好的，>1500ms 鱼就跑了。
-// 分数 = 稀有度底分 × 尺寸系数（0.8–1.3），今日幸运鱼 ×2。
-const DERBY_CASTS = 5, DERBY_TTL = 24 * 3600000;
-const PTS = { common: 10, rare: 25, epic: 60, legend: 150 };
-const SIZE_CM = { crucian: 22, clown: 9, puffer: 18, shrimp: 7, boot: 28, koi: 45, jelly: 30, octopus: 60, bottle: 25, whale: 900, turtle: 80, chest: 40, goldkoi: 55, mermaid: 120, star: 35 };
-const LUCKY_FROM = ["crucian", "clown", "puffer", "shrimp", "koi", "jelly", "octopus", "turtle"];
+// ---------------------------------------------------------------- 钓鱼大赛 2.0（v17）
+// 每人 5 竿，24 小时内打完。规则数据在 site/derbydata.js（和网页共用）。
+//   cast {spot, bait}  甩竿：服务器定"多久咬钩"，挂饵就扣背包里的菜（或者用这场送的免费饵）
+//   hook {cid, react}  咬钩后拉：这时才抽鱼（快手 ≤400ms 抽两次取好的）；返回稀有度给网页定收线难度，鱼是什么先不说
+//   land {cid, ok, q, perfect}  收线小游戏的结果：q 0..1 越高鱼越大；ok=false 就是鱼挣脱了
+//   release            放生刚钓上的那一竿，竿数退回来（每场 2 次）
+//   quit               认输
+// 鱼王：两个人钓上来的分数都算对鱼王的伤害，体力打空它就浮出水面，下一竿（谁先甩谁的）就是它，钓上来 +120 分；
+//       挣脱了恢复 30% 体力，要再打一遍。鱼王这一竿不占比赛的竿数。
+// 状态写入用 compare-and-swap（两个人同时钓也不会互相覆盖）。
+const DERBY_TTL = DERBY.ttlH * 3600000;
+const PTS = DERBY.pts;
 export function luckyFish(day) {
   const n = Math.floor(Date.parse(day + "T00:00:00Z") / 86400000);
-  return LUCKY_FROM[((n * 7 + 3) % LUCKY_FROM.length + LUCKY_FROM.length) % LUCKY_FROM.length];
+  const from = Object.keys(FISH).filter((id) => (FISH[id].spot === "sea" || FISH[id].spot === "pool") && !FISH[id].cond && FISH[id].kind === "fish" && (FISH[id].rarity === "common" || FISH[id].rarity === "rare"));
+  return from[((n * 7 + 3) % from.length + from.length) % from.length];
 }
-function rollFish(pool) {
-  const total = pool.reduce((a, p) => a + p[2], 0);
-  let x = rand01() * total;
-  for (const p of pool) if ((x -= p[2]) < 0) return p;
-  return pool[0];
+function pickW(list) { // [[x, w], ...]
+  let t = list.reduce((a, x) => a + x[1], 0) * rand01();
+  for (const x of list) if ((t -= x[1]) < 0) return x[0];
+  return list[0][0];
 }
-function scoreOf(pick, lucky) {
-  const [id, rarity] = pick;
-  const k = 0.8 + rand01() * 0.5;
-  let pts = Math.round((id === "boot" ? 3 : PTS[rarity]) * k);
+function derbyRoll(spot, fe, bait) {
+  if (bait === "dark") { const all = Object.keys(FISH).filter((id) => FISH[id].spot === spot); return all[Math.floor(rand01() * all.length)]; }
+  const ids = Object.keys(FISH).filter((id) => catchable(id, spot, fe));
+  return pickW(ids.map((id) => {
+    const r = FISH[id].rarity;
+    let w = fishWeight(id);
+    if (bait === "sea" && r !== "common") w *= 2;
+    if (bait === "star") w *= r === "epic" ? 2 : r === "legend" ? 4 : 1;
+    return [id, w];
+  }));
+}
+const RANK = { common: 0, rare: 1, epic: 2, legend: 3 };
+function scoreFish(id, q, bait, lucky, spot, perfect) {
+  const f = FISH[id], k = 0.75 + 0.55 * q + (bait === "sweet" ? 0.2 : 0);
+  let pts = (f.kind === "item" && f.rarity === "common" ? DERBY.junkPts : PTS[f.rarity]) * (0.8 + 0.5 * q) * (bait === "sweet" ? 1.15 : 1) * (bait === "double" ? 0.6 : 1);
   if (id === lucky) pts *= 2;
-  return { f: id, rarity, pts, cm: Math.max(1, Math.round((SIZE_CM[id] || 20) * k)), lucky: id === lucky };
+  return { f: id, rarity: f.rarity, cm: Math.max(1, Math.round((f.cm || 20) * k)), pts: Math.round(pts), lucky: id === lucky, big: k >= 1.2, spot, perfect: !!perfect };
 }
-const derbyTotal = (p) => p.casts.reduce((a, c) => a + c.pts, 0);
+const castPts = (c) => c.pts || 0;
+function derbyScore(d, who) {
+  const p = d.p[who], base = p.casts.reduce((a, c) => a + castPts(c), 0), combos = combosOf(p.casts, FISH);
+  const king = d.king && d.king.landed === who ? DERBY.kingBonus : 0;
+  return { base, combos, king, total: base + combos.bonus + king };
+}
 function derbyView(d) {
   if (!d) return null;
-  const strip = (p) => ({ casts: p.casts, total: derbyTotal(p), pending: !!p.pend });
-  return { id: d.id, by: d.by, ts: d.ts, until: d.until, max: d.max, lucky: d.lucky, status: d.status, winner: d.winner ?? null, p: { me: strip(d.p.me), her: strip(d.p.her) } };
+  const strip = (who) => { const p = d.p[who], sc = derbyScore(d, who); return { casts: p.casts, total: sc.total, base: sc.base, combos: sc.combos.got, prog: sc.combos.prog, kingPts: sc.king, pending: !!p.pend, releases: p.releases ?? DERBY.releases, free: p.free || null, freeUsed: !!p.freeUsed }; };
+  const k = d.king && { f: d.king.f, hp: Math.max(0, d.king.hp), max: d.king.max, up: !!d.king.up, landed: d.king.landed || null, cm: d.king.cm || null, escapes: d.king.escapes || 0 };
+  return { id: d.id, v: d.v || 1, by: d.by, ts: d.ts, until: d.until, max: d.max, lucky: d.lucky, status: d.status, winner: d.winner ?? null, king: k, p: { me: strip("me"), her: strip("her") } };
 }
-async function derbyFinish(env, d, deps, force) {
+async function derbyFinish(env, d, deps, force, fx) {
   if (d.status !== "live") return null;
   d.status = "done";
-  const a = derbyTotal(d.p.me), b = derbyTotal(d.p.her);
+  const a = derbyScore(d, "me").total, b = derbyScore(d, "her").total;
   d.winner = force || (a === b ? null : a > b ? "me" : "her");
-  await deps.mint(env, `derby:${d.id}`, 3);
-  if (d.winner) {
-    await grantWish(env, d.winner, `derby:${d.id}`);
-    await setMeta(env, "trophy", { who: d.winner, game: "derby", pts: Math.max(a, b), until: now() + 7 * 86400000 });
-  }
-  await pushHist(env, "derby_hist", { id: d.id, me: a, her: b, winner: d.winner });
-  await addEvent(env, d.winner || "sys", "derby", "end", null);
+  fx.push(async () => {
+    await deps.mint(env, `derby:${d.id}`, 3);
+    if (d.winner) {
+      await grantWish(env, d.winner, `derby:${d.id}`);
+      await setMeta(env, "trophy", { who: d.winner, game: "derby", pts: Math.max(a, b), until: now() + 7 * 86400000 });
+    }
+    await pushHist(env, "derby_hist", { id: d.id, me: a, her: b, winner: d.winner, king: d.king ? d.king.landed || null : undefined });
+    await addEvent(env, d.winner || "sys", "derby", "end", null);
+  });
   return { winner: d.winner, me: a, her: b };
+}
+// 读 → 改 → 只有没被别人改过才写（最多重试 8 次）。fn 返回 { error } 时不写；fx 里的副作用写成功后才做
+async function derbyMutate(env, deps, fn) {
+  for (let i = 0; i < 8; i++) {
+    const r = await env.DB.prepare("SELECT v FROM meta WHERE k = 'derby'").first();
+    const raw = r ? r.v : null;
+    let d = null;
+    try { d = raw ? JSON.parse(raw) : null; } catch { d = null; }
+    const fx = [];
+    let out;
+    if (d && d.status === "live" && now() > d.until) await derbyFinish(env, d, deps, null, fx); // 过期了：先结算，再照常处理这次请求
+    out = await fn(d, fx);
+    const nd = out && out.next !== undefined ? out.next : d;
+    if (out && out.error && !fx.length) return out;
+    const v = JSON.stringify(nd);
+    let ok;
+    if (v === raw) ok = true;
+    else if (raw === null) ok = (await env.DB.prepare("INSERT OR IGNORE INTO meta (k, v) VALUES ('derby', ?)").bind(v).run()).meta.changes === 1;
+    else ok = (await env.DB.prepare("UPDATE meta SET v = ? WHERE k = 'derby' AND v = ?").bind(v, raw).run()).meta.changes === 1;
+    if (ok) { for (const f of fx) { const e = await f(); if (typeof e === "number" && out && !out.eid) out.eid = e; } if (out) delete out.next; return out; }
+    await new Promise((res) => setTimeout(res, 20 + rand01() * 60));
+  }
+  return { error: "busy, try again", status: 503 };
 }
 async function derbyLoad(env, deps) {
   const d = await getMeta(env, "derby");
-  if (d && d.status === "live" && now() > d.until) { await derbyFinish(env, d, deps); await setMeta(env, "derby", d); }
-  return d;
+  if (d && d.status === "live" && now() > d.until) await derbyMutate(env, deps, () => ({ ok: true }));
+  return getMeta(env, "derby");
+}
+const doneAll = (d) => d.p.me.casts.length >= d.max && d.p.her.casts.length >= d.max && !(d.king && d.king.up && !d.king.landed);
+function baitOf(key) { // 背包里的菜 → 鱼饵种类
+  if (!key || !key.startsWith("d:")) return null;
+  const rid = key.split(":")[1];
+  const tag = rid === "dark" ? "dark" : RECIPES[rid] && RECIPES[rid].tag;
+  return TAG_BAIT[tag] || null;
 }
 async function derby(env, b, deps) {
-  const d = await derbyLoad(env, deps);
-  const live = d && d.status === "live";
   if (b.op === "challenge") {
-    if (live) return { error: "a derby is already live", status: 409 };
-    const id = now();
-    const nd = { id, by: b.who, ts: id, until: id + DERBY_TTL, max: DERBY_CASTS, lucky: luckyFish(deps.bjDay()), status: "live", p: { me: { casts: [], pend: null }, her: { casts: [], pend: null } } };
-    await setMeta(env, "derby", nd);
-    const eid = await addEvent(env, b.who, "derby", "start", null);
-    return { ok: true, derby: derbyView(nd), eid, push: { kind: "derby", item: "start" } };
+    return derbyMutate(env, deps, (d) => {
+      if (d && d.status === "live") return { error: "a derby is already live", status: 409 };
+      const id = now(), [lo, hi] = DERBY.kingHp, hp = Math.round(lo + rand01() * (hi - lo));
+      const player = () => ({ casts: [], pend: null, releases: DERBY.releases, free: pickW(FREE_BAITS), freeUsed: false });
+      const nd = { v: 2, id, by: b.who, ts: id, until: id + DERBY_TTL, max: DERBY.casts, lucky: luckyFish(deps.bjDay()), status: "live",
+        king: { f: KINGS[Math.floor(rand01() * KINGS.length)], hp, max: hp, up: false, landed: null, escapes: 0 },
+        p: { me: player(), her: player() } };
+      const out = { ok: true, derby: derbyView(nd), next: nd, push: { kind: "derby", item: "start" } };
+      return out;
+    }).then(async (out) => { if (out.ok) out.eid = await addEvent(env, b.who, "derby", "start", null); return out; });
   }
-  if (!live) return { error: "no live derby", status: 409 };
-  const me = d.p[b.who];
-  if (b.op === "quit") { // 认输：直接结束，对方赢
-    me.casts.push(...Array.from({ length: d.max - me.casts.length }, () => ({ f: null, pts: 0, quit: true, ts: now() })));
-    const result = await derbyFinish(env, d, deps, other(b.who));
-    await setMeta(env, "derby", d);
-    return { ok: true, result, derby: derbyView(d), eid: 0 };
+  // 挂饵要先从背包里扣菜（背包在 life 状态里，单独的 CAS）；后面比赛状态写失败就把菜退回去
+  let baitKind = null, bagKey = null;
+  if (b.op === "cast" && b.bait && b.bait !== "free") {
+    baitKind = baitOf(b.bait);
+    if (!baitKind) return { error: "bad bait", status: 400 };
+    bagKey = b.bait;
   }
-  if (b.op === "cast") {
-    if (me.casts.length >= d.max) return { error: "no casts left", status: 409 };
-    me.pend = { cid: crypto.getRandomValues(new Uint32Array(1))[0], at: now(), bite: Math.round(1600 + rand01() * 2800) };
-    await setMeta(env, "derby", d);
-    return { ok: true, cid: me.pend.cid, bite: me.pend.bite, used: me.casts.length, max: d.max };
-  }
-  if (b.op === "reel") {
-    const p = me.pend;
-    if (!p || p.cid !== b.cid) return { error: "no such cast", status: 409 };
-    me.pend = null;
-    const react = num(b.react, 0, 60000) ? Math.round(b.react) : null;
-    const early = now() - p.at < p.bite - 400; // 咬钩之前就拉 = 空竿
-    let rec;
-    if (early || react == null || react > 1500) rec = { f: null, pts: 0, react, miss: early ? "early" : "slow", ts: now() };
-    else {
-      let pick = rollFish(deps.POOL);
-      let quick = false;
-      if (react <= 400) { // 快手：再抽一次，取分高的
-        const alt = rollFish(deps.POOL);
-        if (PTS[alt[1]] > PTS[pick[1]]) pick = alt;
-        quick = true;
-      }
-      rec = { ...scoreOf(pick, d.lucky), react, quick, ts: now() };
+  const spot = b.spot === "pool" ? "pool" : "sea";
+  const fe = b.op === "cast" ? await deps.fishEnv(b.who) : null;
+  if (bagKey) { const t = await deps.bagTake(env, bagKey); if (t && t.error) return t; }
+  const out = await derbyMutate(env, deps, async (d, fx) => {
+    if (!d || d.status !== "live") return { error: "no live derby", status: 409 };
+    const me = d.p[b.who];
+    me.releases ??= DERBY.releases;
+    const kingUp = d.king && d.king.up && !d.king.landed;
+    if (b.op === "quit") {
+      me.casts.push(...Array.from({ length: Math.max(0, d.max - me.casts.length) }, () => ({ f: null, pts: 0, quit: true, ts: now() })));
+      me.pend = null;
+      const result = await derbyFinish(env, d, deps, other(b.who), fx);
+      return { ok: true, result, derby: derbyView(d), eid: 0 };
     }
-    me.casts.push(rec);
-    const eid = await addEvent(env, b.who, "dfish", rec.f || "miss", rec.pts);
-    if (rec.f && deps.onCatch) await deps.onCatch(env, b.who, rec.f, rec.cm, "sea");
-    let result = null;
-    if (d.p.me.casts.length >= d.max && d.p.her.casts.length >= d.max) result = await derbyFinish(env, d, deps);
-    await setMeta(env, "derby", d);
-    return { ok: true, cast: rec, used: me.casts.length, max: d.max, result, derby: derbyView(d), eid };
-  }
-  return { error: "bad op", status: 400 };
+    if (b.op === "cast") {
+      if (me.casts.length >= d.max && !kingUp) return { error: "no casts left", status: 409 };
+      if (me.pend && me.pend.fish) me.casts.push({ f: null, pts: 0, miss: "escape", ts: now() }); // 上一竿咬了钩没收完：算挣脱
+      let bait = baitKind;
+      if (b.bait === "free") { if (me.freeUsed || !me.free) return { error: "free bait used", status: 409 }; bait = me.free; me.freeUsed = true; }
+      const king = !!kingUp;
+      me.pend = { cid: crypto.getRandomValues(new Uint32Array(1))[0], at: now(), bite: Math.round((king ? 2200 : 1600) + rand01() * 2600), spot, bait, fe, king };
+      return { ok: true, cid: me.pend.cid, bite: me.pend.bite, king, bait, used: me.casts.length, max: d.max };
+    }
+    if (b.op === "hook") {
+      const p = me.pend;
+      if (!p || p.cid !== b.cid || p.fish) return { error: "no such cast", status: 409 };
+      const react = num(b.react, 0, 60000) ? Math.round(b.react) : null;
+      const early = now() - p.at < p.bite - 400;
+      if (early || react == null || react > 1500) {
+        me.pend = null;
+        const miss = early ? "early" : "slow";
+        if (p.king) return { ok: true, miss, king: true, derby: derbyView(d) }; // 鱼王这一竿不占竿数
+        const rec = { f: null, pts: 0, react, miss, bait: p.bait, ts: now() };
+        me.casts.push(rec);
+        fx.push(() => addEvent(env, b.who, "dfish", "miss", 0));
+        const result = doneAll(d) ? await derbyFinish(env, d, deps, null, fx) : null;
+        return { ok: true, miss, cast: rec, result, derby: derbyView(d) };
+      }
+      const quick = react <= 400;
+      let ids;
+      if (p.king) ids = [d.king.f];
+      else {
+        const roll = () => { let id = derbyRoll(p.spot, p.fe, p.bait); if (quick) { const alt = derbyRoll(p.spot, p.fe, p.bait); if (RANK[FISH[alt].rarity] > RANK[FISH[id].rarity]) id = alt; } return id; };
+        ids = p.bait === "double" ? [roll(), roll()] : [roll()];
+      }
+      p.fish = ids; p.quick = quick; p.react = react; p.hookAt = now();
+      const top = p.king ? "king" : ids.map((id) => FISH[id].rarity).sort((x, y) => RANK[y] - RANK[x])[0];
+      return { ok: true, diff: top, n: ids.length, quick, sweet: p.bait === "sweet", king: !!p.king };
+    }
+    if (b.op === "land") {
+      const p = me.pend;
+      if (!p || p.cid !== b.cid || !p.fish) return { error: "no such cast", status: 409 };
+      me.pend = null;
+      const q = num(b.q, 0, 1) ? b.q : 0, perfect = !!b.perfect && b.ok;
+      if (p.king) {
+        if (!b.ok) {
+          d.king.up = false; d.king.escapes = (d.king.escapes || 0) + 1; d.king.hp = Math.round(d.king.max * DERBY.kingRegen);
+          fx.push(() => addEvent(env, b.who, "dking", "escape", 0));
+          const result = doneAll(d) ? await derbyFinish(env, d, deps, null, fx) : null;
+          return { ok: true, king: true, escaped: true, result, derby: derbyView(d) };
+        }
+        const kf = scoreFish(d.king.f, Math.max(q, 0.6), null, null, p.spot, perfect);
+        d.king.landed = b.who; d.king.up = false; d.king.cm = Math.round(kf.cm * 2.2);
+        fx.push(async () => {
+          const e = await addEvent(env, b.who, "dking", d.king.f, DERBY.kingBonus);
+          await deps.mint(env, `derbyking:${d.id}`, DERBY.kingStars);
+          if (deps.onCatch) await deps.onCatch(env, b.who, d.king.f, d.king.cm, p.spot);
+          return e;
+        });
+        const result = doneAll(d) ? await derbyFinish(env, d, deps, null, fx) : null;
+        return { ok: true, king: true, landed: { f: d.king.f, cm: d.king.cm, pts: DERBY.kingBonus }, result, derby: derbyView(d) };
+      }
+      let rec;
+      if (!b.ok) rec = { f: null, pts: 0, miss: "escape", bait: p.bait, spot: p.spot, ts: now() };
+      else {
+        const fish = p.fish.map((id) => scoreFish(id, q, p.bait, d.lucky, p.spot, perfect));
+        const best = fish.slice().sort((x, y) => y.pts - x.pts)[0];
+        rec = { f: best.f, rarity: best.rarity, cm: best.cm, pts: fish.reduce((a, x) => a + x.pts, 0), lucky: fish.some((x) => x.lucky), fish, quick: p.quick, react: p.react, q: Math.round(q * 100) / 100, perfect, bait: p.bait, spot: p.spot, ts: now() };
+      }
+      me.casts.push(rec);
+      let surfaced = false;
+      if (rec.pts && d.king && !d.king.landed && !d.king.up) {
+        d.king.hp -= rec.pts;
+        if (d.king.hp <= 0) { d.king.up = true; surfaced = true; }
+      }
+      fx.push(async () => {
+        const e = await addEvent(env, b.who, "dfish", rec.f || "miss", rec.pts);
+        if (surfaced) await addEvent(env, b.who, "dking", "up", 0);
+        if (rec.fish && deps.onCatch) for (const x of rec.fish) await deps.onCatch(env, b.who, x.f, x.cm, x.spot);
+        return e;
+      });
+      const result = doneAll(d) ? await derbyFinish(env, d, deps, null, fx) : null;
+      return { ok: true, cast: rec, surfaced, used: me.casts.length, max: d.max, result, derby: derbyView(d) };
+    }
+    if (b.op === "debug_king" && deps.dev) { d.king.hp = Math.min(d.king.hp, b.hp ?? 5); return { ok: true, derby: derbyView(d) }; }
+    if (b.op === "release") {
+      const last = me.casts[me.casts.length - 1];
+      if (me.pend) return { error: "still fishing", status: 409 };
+      if (!last || !last.f || last.released) return { error: "nothing to release", status: 409 };
+      if (me.releases <= 0) return { error: "no releases left", status: 409 };
+      if (now() - last.ts > 5 * 60000) return { error: "too late", status: 409 };
+      me.casts.pop(); me.releases--;
+      if (d.king && !d.king.landed) { d.king.hp += last.pts; if (d.king.up && d.king.hp > 0) d.king.up = false; }
+      fx.push(() => addEvent(env, b.who, "dfish", "release", -last.pts));
+      return { ok: true, released: last.f, derby: derbyView(d) };
+    }
+    return { error: "bad op", status: 400 };
+  });
+  if (bagKey && out && out.error) await deps.bagAdd(env, { [bagKey]: 1 }).catch(() => {}); // 没甩出去：菜退回背包
+  return out;
 }
 
 // ---------------------------------------------------------------- 默契大考验

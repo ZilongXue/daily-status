@@ -68,6 +68,9 @@ const take = (s, k, n = 1) => { if ((s.bag[k] || 0) < n) return false; addBag(s,
 export const bagKeyForFish = (id) => (FISH[id] && FISH[id].food ? "f:" + id : null);
 
 // 给 index.js 用：钓到鱼 / 收菜时往背包里放东西
+export async function bagTake(env, key) {
+  return mutate(env, (s) => (take(s, key) ? { ok: true } : { error: "not in bag", status: 409 }));
+}
 export async function bagAdd(env, items) {
   return mutate(env, (s) => { for (const [k, n] of Object.entries(items)) if (k) addBag(s, k, n); return { ok: true }; });
 }

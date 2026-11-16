@@ -539,3 +539,52 @@ body.immersive .catch-card.lite { padding-top: calc(64px + env(safe-area-inset-t
   body.immersive .edit-bar { width: auto; }
   body.immersive .catch-card { right: var(--side); }
 }
+
+/* ================= v17 钓鱼大赛 2.0：收线小游戏、大赛面板、鱼王 ================= */
+.reel { position: fixed; inset: 0; z-index: 90; touch-action: none; user-select: none; -webkit-user-select: none; display: flex; align-items: center; justify-content: flex-end; padding-right: max(14px, env(safe-area-inset-right)); }
+.reel-box { background: rgba(255, 253, 248, .95); border-radius: 20px; padding: 10px 12px 8px; box-shadow: 0 8px 30px rgba(0,0,0,.25); text-align: center; animation: pop .3s cubic-bezier(.2, 1.6, .4, 1); transition: transform .2s, opacity .3s; }
+.reel-box.out { box-shadow: 0 0 0 3px #ef6b5b, 0 8px 30px rgba(0,0,0,.25); }
+.reel-box.won { transform: scale(1.08); opacity: 0; } .reel-box.lost { transform: translateY(20px) rotate(-6deg); opacity: 0; transition-duration: .6s; }
+.reel-t { margin: 0 0 8px; font: 800 14px ui-rounded, system-ui, "PingFang SC", sans-serif; }
+.reel-h { margin: 6px 0 0; font-size: 11px; color: var(--muted); }
+.reel-row { display: flex; gap: 8px; justify-content: center; }
+.reel-track { position: relative; width: 46px; height: min(260px, 42vh); border-radius: 14px; background: linear-gradient(#4aa3d8, #1f5f8f); overflow: hidden; box-shadow: inset 0 0 0 3px #7b5235; }
+.reel-zone { position: absolute; left: 4px; right: 4px; bottom: 0; border-radius: 9px; background: rgba(120, 230, 110, .78); box-shadow: inset 0 0 0 2px #3fae46; }
+.reel-fish { position: absolute; left: 50%; transform: translateX(-50%); font-size: 22px; line-height: 24px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.4)); }
+.reel.king .reel-track { box-shadow: inset 0 0 0 3px #e0a000; }
+.reel-prog { position: relative; width: 12px; border-radius: 9px; background: #eadfd6; overflow: hidden; }
+.reel-prog i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 9px; transition: background .2s; }
+.derby .dsec { margin: 8px 0 4px; font-size: 12.5px; font-weight: 800; color: var(--muted); }
+.derby .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.derby .chips button { font: inherit; font-size: 13px; border: 0; border-radius: 99px; padding: 6px 11px; background: #fff; box-shadow: 0 2px 0 #f1d5c4; cursor: pointer; }
+.derby .chips button.on { background: #ffe08a; box-shadow: 0 2px 0 #e0b84a; font-weight: 700; }
+.derby .chips button small { color: var(--muted); font-size: 11px; }
+.dking { background: linear-gradient(135deg, #2b3a67, #5a3d7a); color: #fff; border-radius: 14px; padding: 9px 11px; margin: 6px 0; }
+.dking.up { animation: kingglow 1.2s ease-in-out infinite alternate; }
+@keyframes kingglow { to { box-shadow: 0 0 0 3px #ffd34d, 0 0 22px rgba(255, 211, 77, .7); } }
+.dking .khead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-weight: 800; }
+.dking .khp { height: 10px; border-radius: 9px; background: rgba(255,255,255,.2); overflow: hidden; margin: 6px 0 4px; }
+.dking .khp i { display: block; height: 100%; border-radius: 9px; background: linear-gradient(90deg, #ff6b5b, #ffb347); transition: width .6s; }
+.dking small { opacity: .85; font-size: 12px; }
+.combos { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 5px; }
+.combos span { font-size: 12px; padding: 5px 7px; border-radius: 10px; background: #fff; opacity: .6; line-height: 1.3; }
+.combos span.got { opacity: 1; background: #fff3c4; box-shadow: 0 0 0 2px #f2c14e; font-weight: 700; }
+.combos span.near { opacity: .95; box-shadow: 0 0 0 1.5px #f2c9a8; }
+.combos span small { display: block; color: var(--muted); font-weight: 400; }
+.drow .dots i.two { font-size: 11px; letter-spacing: -3px; }
+.drow .sub2 { font-size: 11.5px; color: var(--muted); }
+.derby-bar { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); z-index: 7; display: flex; gap: 6px; align-items: center; animation: fadein .25s; }
+.derby-bar[hidden] { display: none; }
+.derby-bar button { border: 0; border-radius: 99px; padding: 8px 13px; font: 800 14px ui-rounded, system-ui, "PingFang SC", sans-serif; cursor: pointer; white-space: nowrap;
+  background: rgba(255,255,255,.92); box-shadow: 0 3px 0 rgba(0,0,0,.12), 0 4px 14px rgba(0,0,0,.15); color: #4a3d5c; }
+.derby-bar [data-db=cast] { background: #ffe08a; box-shadow: 0 3px 0 #e0b84a, 0 4px 14px rgba(0,0,0,.15); }
+.derby-bar [data-db=cast].king { background: linear-gradient(135deg, #ffd34d, #ff9a3d); }
+.derby-bar button small { display: block; font-size: 10.5px; font-weight: 700; opacity: .7; }
+.derby-bar button:disabled { opacity: .5; }
+.scene:has(.derby-bar:not([hidden])) .hint, .scene:has(.derby-bar:not([hidden])) .species { visibility: hidden; }
+.scene.inside .derby-bar, body.photo-on .derby-bar { display: none !important; }
+.view-chips { position: absolute; right: 12px; top: 56px; z-index: 7; display: flex; flex-direction: column; gap: 6px; }
+.view-chips button { width: 34px; height: 34px; border: 0; border-radius: 50%; font-size: 16px; line-height: 1; cursor: pointer; background: rgba(255,255,255,.78); box-shadow: 0 2px 8px rgba(0,0,0,.14); }
+.view-chips button.on { background: #ffe08a; }
+.scene:not(.has3d) .view-chips, .scene.inside .view-chips, body.photo-on .view-chips { display: none; }
+body.immersive .view-chips { top: calc(54px + env(safe-area-inset-top)); }
