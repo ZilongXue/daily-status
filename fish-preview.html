@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fish preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #d4f0fb; font: 14px system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  button { border: 1px solid #b9cfd8; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  #stat { position: fixed; top: 6px; left: 8px; font-size: 12px; color: #456; background: rgba(255,255,255,.7); padding: 4px 8px; border-radius: 6px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stat"></div>
+<div class="bar" id="bar"></div>
+<script type="module">
+// ?focus=<id> 只看一个（近景）；?yaw=<deg> 把所有东西转个角度；?spin 慢慢转
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { CATCH, RARITY, buildCatch, swim, shine, buildRod, buildBobber, bobberIdle, bobberBite, buildSplash, buildSchoolFish, schoolTick } from "./fish3d.js";
+
+const params = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xd4f0fb);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+// 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+const T = { toon, outlined };
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+
+function label(text, sub, color) {
+  const cv = document.createElement("canvas");
+  cv.width = 320; cv.height = 96;
+  const g = cv.getContext("2d");
+  g.fillStyle = color;
+  g.beginPath(); g.roundRect(8, 8, 304, 80, 36); g.fill();
+  g.fillStyle = "#fff";
+  g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = "bold 34px system-ui, 'PingFang SC', sans-serif";
+  g.fillText(text, 160, 40);
+  g.font = "22px system-ui, sans-serif";
+  g.fillText(sub, 160, 72);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+  sp.scale.set(0.6, 0.18, 1);
+  return sp;
+}
+const discTex = (() => {
+  const cv = document.createElement("canvas"); cv.width = cv.height = 64;
+  const g = cv.getContext("2d");
+  const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, "rgba(255,255,255,.95)"); gr.addColorStop(0.7, "rgba(255,255,255,.55)"); gr.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(cv);
+})();
+
+const SP_X = 0.78, SP_Y = 0.86;
+const cells = [];
+const yaw = THREE.MathUtils.degToRad(+params.get("yaw") || 0);
+function cell(col, row, nCols, obj, title, sub, color) {
+  const g = new THREE.Group();
+  g.position.set((col - (nCols - 1) / 2) * SP_X, -row * SP_Y, 0);
+  const bg = new THREE.Mesh(new THREE.CircleGeometry(0.36, 32), new THREE.MeshBasicMaterial({ map: discTex, color, transparent: true, opacity: 0.55, depthWrite: false }));
+  bg.position.z = -0.35;
+  g.add(bg);
+  if (obj) { obj.rotation.y = yaw; g.add(obj); }
+  const lb = label(title, sub, color);
+  lb.position.set(0, -0.36, 0.1);
+  g.add(lb);
+  scene.add(g);
+  cells.push(g);
+  return g;
+}
+
+const focus = params.get("focus");
+const catches = [];
+const order = ["common", "rare", "epic", "legend"];
+const ids = Object.keys(CATCH).filter((id) => !focus || id === focus);
+let row = 0;
+for (const r of order) {
+  const list = ids.filter((id) => CATCH[id].rarity === r);
+  if (!list.length) continue;
+  list.forEach((id, i) => {
+    const c = buildCatch(id, T);
+    catches.push(c);
+    const s = c.size;
+    cell(i, row, focus ? 1 : 5, c.root, `${CATCH[id].emoji} ${CATCH[id].name}`, `${RARITY[r].name} · ${s.x.toFixed(2)}×${s.y.toFixed(2)}×${s.z.toFixed(2)}`, RARITY[r].color);
+    console.log(id, "size", s.toArray().map((v) => v.toFixed(3)).join(" x "));
+  });
+  row++;
+}
+
+// 工具那一行：鱼竿、浮漂（等待 / 咬钩）、水花、小鱼群
+let rod, bob, bob2, splash, school = [];
+if (!focus || focus === "tools") {
+  const water = () => {
+    const w = new THREE.Mesh(new THREE.CircleGeometry(0.24, 32), toon(0x7fd0f0, { transparent: true, opacity: 0.85 }));
+    w.rotation.x = -Math.PI / 2;
+    return w;
+  };
+  rod = buildRod(T);
+  const rg = new THREE.Group();
+  rod.root.rotation.z = -0.75;
+  rod.root.position.set(-0.32, -0.3, 0);
+  rod.root.scale.setScalar(0.62);
+  rg.add(rod.root);
+  const tipMark = new THREE.Mesh(new THREE.SphereGeometry(0.01, 6, 4), new THREE.MeshBasicMaterial({ color: 0x00aa00 }));
+  rod.tip.add(tipMark);
+  cell(0, row, 5, rg, "🎣 鱼竿", "1.1 长 · ×0.62 显示", "#7aa7b8");
+
+  const bobCell = (col, title) => {
+    const g = new THREE.Group();
+    const w = water(); g.add(w);
+    const b = buildBobber(T); g.add(b.root);
+    g.rotation.x = 0.5;
+    g.scale.setScalar(1.25);
+    cell(col, row, 5, g, title, "", "#7aa7b8");
+    return b;
+  };
+  bob = bobCell(1, "浮漂 · 等待");
+  bob2 = bobCell(2, "浮漂 · 咬钩");
+
+  const sg = new THREE.Group();
+  sg.add(water());
+  splash = buildSplash();
+  sg.add(splash.root);
+  sg.rotation.x = 0.5;
+  sg.scale.setScalar(1.25);
+  cell(3, row, 5, sg, "水花", "", "#7aa7b8");
+
+  const fg = new THREE.Group();
+  const colors = [0xffb27a, 0xffe08a, 0x9fd8ff, 0xffa3c4, 0xb8f0b0];
+  for (let i = 0; i < 10; i++) {
+    const f = buildSchoolFish(colors[i % colors.length]);
+    f.userData.r = 0.12 + (i % 3) * 0.07;
+    f.userData.ph = i * 0.9;
+    f.userData.y = ((i % 4) - 1.5) * 0.06;
+    fg.add(f);
+    school.push(f);
+  }
+  fg.rotation.x = 0.35;
+  cell(4, row, 5, fg, "小鱼群", "9 tris / 条", "#7aa7b8");
+  row++;
+}
+
+const rows = row;
+const span = Math.max(1, rows);
+function place() {
+  const tn = Math.tan(THREE.MathUtils.degToRad(15));
+  const one = focus && focus !== "tools";
+  const H = one ? 0.95 : span * SP_Y + 0.15, W = one ? 0.9 : 5 * SP_X + 0.1;
+  const fit = Math.max(H / (2 * tn), W / (2 * tn * camera.aspect));
+  controls.target.set(0, -((rows - 1) * SP_Y) / 2 - (one ? 0.08 : 0.05), 0);
+  camera.position.set(0, controls.target.y + fit * 0.1, fit);
+  controls.update();
+}
+
+let tris = 0;
+scene.traverse((o) => { if (o.isMesh && o.geometry.index) tris += o.geometry.index.count / 3; else if (o.isMesh) tris += o.geometry.attributes.position.count / 3; });
+
+// 控制按钮
+const pick = (k) => ({ "1": "on", "0": "off" })[params.get(k)] || "auto";
+const state = { puff: pick("puff"), lids: pick("lids"), anim: true };
+const bar = document.getElementById("bar");
+const btn = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; bar.appendChild(b); };
+btn("puff 自动/鼓/瘪", () => { state.puff = state.puff === "auto" ? "on" : state.puff === "on" ? "off" : "auto"; });
+btn("盖子 自动/开/关", () => { state.lids = state.lids === "auto" ? "on" : state.lids === "on" ? "off" : "auto"; });
+btn("动画", () => { state.anim = !state.anim; });
+btn("水花", () => splash && splash.play());
+for (const [k, deg] of Object.entries({ "正面": 0, "背面": 180, "3/4": 40 })) btn(k, () => { for (const c of catches) c.root.rotation.y = THREE.MathUtils.degToRad(deg); });
+window.catches = catches;
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  place();
+}
+addEventListener("resize", resize);
+resize();
+
+const clock = new THREE.Clock();
+let splashT = 0, frames = 0, fpsT = 0;
+const st = document.getElementById("stat");
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta());
+  const t = clock.elapsedTime;
+  if (state.anim) {
+    for (const c of catches) {
+      swim(c, t, 1);
+      shine(c, t);
+      if (c.puff) c.puff(state.puff === "auto" ? Math.max(0, Math.min(1, Math.sin(t * 1.2) * 1.6 + 0.3)) : state.puff === "on" ? 1 : 0);
+      if (c.openLid) c.openLid(state.lids === "auto" ? Math.max(0, Math.min(1, Math.sin(t * 0.9) * 1.4 + 0.4)) : state.lids === "on" ? 1 : 0);
+      if (params.has("spin")) c.root.rotation.y = t * 0.6;
+    }
+    if (bob) { bobberIdle(bob, t); bobberBite(bob2, t); }
+    if (splash) { splashT += dt; if (splashT > 1.4) { splashT = 0; splash.play(); } splash.update(dt); }
+    schoolTick(t);
+    school.forEach((f) => {
+      const a = t * 0.9 + f.userData.ph, r = f.userData.r;
+      f.position.set(Math.cos(a) * r, f.userData.y, Math.sin(a) * r * 0.7);
+      f.rotation.y = -a - Math.PI / 2;
+    });
+  }
+  frames++; fpsT += dt;
+  if (fpsT > 1) { st.textContent = `${Math.round(frames / fpsT)} fps · ${renderer.info.render.calls} draws · ${Math.round(renderer.info.render.triangles)} tris on screen`; frames = 0; fpsT = 0; }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

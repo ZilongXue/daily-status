@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dino preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f3f1ea; font: 14px system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  button { border: 1px solid #c9c2b0; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="bar" id="bar"></div>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { buildDino } from "./dino3d.js";
+
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xf3f1ea);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+camera.position.set(0, 1.4, 5.2);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 0.75, 0);
+controls.enableDamping = true;
+
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(1.4, 32), toon(0x9ad978));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+const pet = buildDino({ toon, outlined });
+scene.add(pet.root);
+window.pet = pet;
+
+const bar = document.getElementById("bar");
+const btn = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = fn; bar.appendChild(b); };
+for (const s of ["open", "half", "happy", "sleep", "wide"]) btn(s, () => pet.setEyes(s));
+for (const k of ["cap", "bubble", "sweat", "yawn"]) btn(k, () => { pet[k].visible = !pet[k].visible; });
+let anim = false;
+btn("animate", () => { anim = !anim; });
+const views = { front: [0, 1.4, 5.2], back: [0, 1.4, -5.2], side: [5.2, 1.4, 0], other: [-5.2, 1.4, 0] };
+for (const [k, p] of Object.entries(views)) btn(k, () => { camera.position.set(...p); controls.update(); });
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+renderer.setAnimationLoop((ms) => {
+  const t = ms / 1000;
+  if (anim) {
+    pet.head.rotation.y = Math.sin(t * 0.8) * 0.5;
+    pet.head.rotation.z = Math.sin(t * 1.1) * 0.12;
+    pet.tail.rotation.y = Math.sin(t * 6) * 0.35;
+    pet.arms.forEach((a, i) => { const s = i ? 1 : -1; a.rotation.z = s * (0.35 + 0.3 + Math.sin(t * 8 + i) * 0.25); });
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
