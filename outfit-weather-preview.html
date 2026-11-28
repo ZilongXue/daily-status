@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outfit &amp; weather preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #eaf4fb; font: 13px system-ui, sans-serif; overflow: hidden; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; }
+  #bar { bottom: 8px; } #bar2 { bottom: 44px; } #bar3 { top: 8px; }
+  button { border: 1px solid #c9d2e0; background: #fff; border-radius: 8px; padding: 5px 9px; cursor: pointer; }
+  button.on { background: #ffd9ea; border-color: #f0a8c8; }
+  #info { position: fixed; left: 8px; top: 44px; color: #607080; font-size: 12px; }
+  .lbl { position: fixed; transform: translate(-50%, 0); color: #5a4048; font-size: 12px; background: #fff9; padding: 1px 6px; border-radius: 6px; pointer-events: none; white-space: nowrap; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<div class="bar" id="bar3"></div>
+<div class="bar" id="bar2"></div>
+<div class="bar" id="bar"></div>
+<div id="labels"></div>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { buildKitten, buildPony, ponyIdle, setRiding } from "./her3d.js";
+// 预览页：带时间戳导入，改完代码刷新就能看到（不吃浏览器缓存）
+const bust = `?v=${Date.now()}`;
+const { OUTFITS, attachOutfit, dressKitten } = await import(`./outfit3d.js${bust}`);
+const { createWeather, buildRainbow, buildCityLights, WEATHER_KINDS } = await import(`./weather3d.js${bust}`);
+
+const q = new URLSearchParams(location.search);
+if (q.has("bare")) document.head.insertAdjacentHTML("beforeend", "<style>.bar, #info { display: none !important; }</style>");
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 200);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+// ---- 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+const ctx = { toon, outlined };
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+
+/* ================================================================ OUTFIT STAGE */
+const outfitStage = new THREE.Group();
+scene.add(outfitStage);
+const pad = (x, r = 1.15) => { const g = new THREE.Mesh(new THREE.CircleGeometry(r, 32), toon(0x9ad978)); g.rotation.x = -Math.PI / 2; g.position.x = x; return g; };
+const kitten = buildKitten(ctx);
+kitten.root.position.x = -1.4;
+const pony = buildPony(ctx);
+pony.root.position.x = 1.4;
+const rider = buildKitten(ctx);
+pony.saddle.add(rider.root);
+setRiding(rider, true);
+outfitStage.add(pad(-1.4), pad(1.4), kitten.root, pony.root);
+
+/* ================================================================ GRID STAGE */
+const gridStage = new THREE.Group();
+scene.add(gridStage);
+const ids = Object.keys(OUTFITS);
+const gridKits = ids.map((id, i) => {
+  const k = buildKitten(ctx);
+  const col = i % 4, row = Math.floor(i / 4);
+  k.root.position.set((col - 1.5) * 1.8, (1 - row) * 1.75, 0);
+  gridStage.add(pad(0, 0.75).translateX(0), k.root);
+  gridStage.children[gridStage.children.length - 2].position.copy(k.root.position);
+  attachOutfit(k, id, ctx);
+  return { k, id };
+});
+
+/* ================================================================ TURNAROUND STAGE: 同一件衣服，正面 / 3/4 / 侧面 / 背面 / 睡觉低头 / 骑马 */
+const turnStage = new THREE.Group();
+scene.add(turnStage);
+const TURN = [0, 0.75, 1.57, 3.14, 0.4];
+const turnKits = TURN.map((ry, i) => { const k = buildKitten(ctx); k.root.position.set((i % 3 - 1) * 1.5, i < 3 ? 2.35 : 0, 0); k.root.rotation.y = ry; turnStage.add(k.root); return k; });
+turnKits[4].sleepy = true;
+const turnPony = buildPony(ctx);
+turnPony.root.position.set(1.5, -0.2, -0.6); turnPony.root.rotation.y = 0.75;
+const turnRider = buildKitten(ctx);
+turnPony.saddle.add(turnRider.root);
+setRiding(turnRider, true);
+turnStage.add(turnPony.root);
+let turnWorn = [];
+
+/* ================================================================ WEATHER STAGE */
+const weatherStage = new THREE.Group();
+scene.add(weatherStage);
+const SEA_Y = -0.85;
+const sea = new THREE.Mesh(new THREE.CircleGeometry(40, 64), toon(0x4fb0e8));
+sea.rotation.x = -Math.PI / 2; sea.position.y = SEA_Y;
+weatherStage.add(sea);
+function island(r, x, z) {
+  const g = new THREE.Group();
+  const top = outlined(new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.92, 0.25, 40), toon(0x9ad978)), 0.03);
+  top.position.y = -0.125;
+  const cliff = outlined(new THREE.Mesh(new THREE.CylinderGeometry(r * 0.92, r * 0.55, 1.6, 40), toon(0xe9c99a)), 0.03);
+  cliff.position.y = -1.05;
+  const tree = new THREE.Group();
+  const trunk = outlined(new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.6, 8), toon(0x8a5a3b)), 0.02); trunk.position.y = 0.3;
+  const leaf = outlined(new THREE.Mesh(new THREE.SphereGeometry(0.42, 14, 10), toon(0x6fcf86)), 0.03); leaf.position.y = 0.85;
+  tree.add(trunk, leaf);
+  tree.position.set(r * 0.3, 0, -r * 0.25);
+  tree.scale.setScalar(r / 3.4);
+  g.add(top, cliff, tree);
+  g.position.set(x, 0, z);
+  weatherStage.add(g);
+  return g;
+}
+const mainIsl = island(3.4, 0, 0);
+const SMALL = new THREE.Vector3(10.5, 0, -9);
+const smallIsl = island(1.6, SMALL.x, SMALL.z);
+const wMain = createWeather({ parent: weatherStage, center: new THREE.Vector3(0, 0, 0), radius: 6.5, top: 5, seaY: SEA_Y, toon, landR: 3.4 });
+const wSmall = createWeather({ parent: weatherStage, center: SMALL.clone(), radius: 3, top: 3, seaY: SEA_Y, toon, landR: 1.6, seed: 2 });
+// 主岛上放一只穿着衣服的小猫，看比例
+const islandKitten = buildKitten(ctx);
+islandKitten.root.scale.setScalar(0.75);
+islandKitten.root.position.set(-0.6, 0, 0.8);
+mainIsl.add(islandKitten.root);
+dressKitten(islandKitten, ["beanie", "red_scarf"], ctx);
+const rainbow = buildRainbow({ from: new THREE.Vector3(-4.2, SEA_Y, -5.5), to: new THREE.Vector3(5.5, SEA_Y, -7.5), height: 6, toon });
+weatherStage.add(rainbow.root);
+const city = buildCityLights({ count: 8, radius: 1.3, toon });
+city.root.position.copy(SMALL);
+weatherStage.add(city.root);
+
+/* ================================================================ UI + camera */
+let mode = q.get("mode") || "outfit";
+let current = q.get("o") || "santa_hat";
+let view = q.get("view") || "34";
+let wview = q.get("w") || "both";
+let worn = null, wornR = null;
+let focus = q.get("focus") || "both";
+let sleep = q.has("sleep"), night = +(q.get("night") || 0), anim = !q.has("still");
+const VIEWS = { front: [0, 0.3, 1], "34": [0.75, 0.38, 0.75], side: [1, 0.3, 0], back: [0, 0.35, -1], other34: [-0.75, 0.38, 0.75], top: [0.2, 1.4, 0.6] };
+function wear(id) {
+  current = id;
+  worn?.remove(); wornR?.remove();
+  worn = id === "none" ? null : attachOutfit(kitten, id, ctx);
+  wornR = id === "none" ? null : attachOutfit(rider, id, ctx);
+  turnWorn.forEach((h) => h.remove());
+  turnWorn = id === "none" ? [] : [...turnKits, turnRider].map((k) => attachOutfit(k, id, ctx));
+  refresh();
+}
+function frame() {
+  outfitStage.visible = mode === "outfit";
+  gridStage.visible = mode === "grid";
+  turnStage.visible = mode === "turn";
+  weatherStage.visible = mode === "weather";
+  scene.background = new THREE.Color(mode === "weather" ? 0xcfe9f7 : 0xf6f0f4);
+  if (mode === "outfit") {
+    const d = new THREE.Vector3(...VIEWS[view]).normalize().multiplyScalar(focus === "both" ? 7.2 : focus === "kitten" ? 4.4 : 5.6);
+    if (focus === "kitten") controls.target.set(-1.4, 1.0, 0);
+    else if (focus === "ride") controls.target.set(1.4, 1.75, 0);
+    else controls.target.set(0, 1.0, 0);
+    camera.position.copy(controls.target).add(d);
+    camera.fov = 32;
+  } else if (mode === "turn") {
+    controls.target.set(0, 1.95, 0);
+    camera.position.set(0, q.has("high") ? 6.4 : 2.9, q.has("high") ? 9.2 : 10.2); // high ≈ 小岛主镜头的俯角
+    camera.fov = 30;
+  } else if (mode === "grid") {
+    const d = new THREE.Vector3(...VIEWS[view === "34" ? "front" : view]).normalize().multiplyScalar(14);
+    controls.target.set(0, 0.75, 0);
+    camera.position.copy(controls.target).add(d);
+    camera.fov = 32;
+  } else {
+    camera.fov = 32;
+    if (wview === "main") { controls.target.set(0, 0.6, -0.7); camera.position.set(0, 6.2, 14.5); }
+    else if (wview === "small") { controls.target.set(SMALL.x, 0.8, SMALL.z); camera.position.set(SMALL.x - 2, 4.5, SMALL.z + 10); }
+    else { controls.target.set(4.5, 1.5, -4); camera.position.set(-1, 9, 21); }
+  }
+  camera.updateProjectionMatrix();
+  controls.update();
+  refresh();
+}
+const mkBar = (id) => document.getElementById(id);
+const btn = (bar, label, fn, isOn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = () => { fn(); }; b.dataset.on = ""; b._isOn = isOn; mkBar(bar).appendChild(b); return b; };
+const all = [];
+const B = (...a) => { const b = btn(...a); all.push(b); return b; };
+function refresh() { for (const b of all) if (b._isOn) b.classList.toggle("on", !!b._isOn()); buildBars(); }
+function buildBars() {
+  const b1 = mkBar("bar"), b2 = mkBar("bar2");
+  b1.style.display = b2.style.display = "flex";
+  for (const b of all) {
+    const g = b.dataset.group;
+    b.style.display = !g || g === mode || (g === "outfit" && mode === "turn") || (g === "outfit" && mode === "grid" && b.dataset.view) ? "" : "none";
+  }
+}
+for (const m of ["outfit", "turn", "grid", "weather"]) B("bar3", m, () => { mode = m; frame(); }, () => mode === m);
+for (const id of ["none", ...ids]) { const b = B("bar", id === "none" ? "无" : `${OUTFITS[id].emoji} ${OUTFITS[id].name}`, () => wear(id), () => current === id); b.dataset.group = "outfit"; }
+for (const v of Object.keys(VIEWS)) { const b = B("bar2", v, () => { view = v; frame(); }, () => view === v); b.dataset.group = "outfit"; b.dataset.view = 1; }
+for (const f of ["both", "kitten", "ride"]) { const b = B("bar2", f, () => { focus = f; frame(); }, () => focus === f); b.dataset.group = "outfit"; b.dataset.view = 1; }
+{ const b = B("bar2", "sleep", () => { sleep = !sleep; refresh(); }, () => sleep); b.dataset.group = "outfit"; b.dataset.view = 1; }
+{ const b = B("bar2", "animate", () => { anim = !anim; refresh(); }, () => anim); b.dataset.group = "outfit"; b.dataset.view = 1; }
+let kind = q.get("kind") || "rain";
+for (const k of WEATHER_KINDS) { const b = B("bar", k, () => { kind = k; wMain.setKind(k); wSmall.setKind(k); refresh(); }, () => kind === k); b.dataset.group = "weather"; }
+for (const v of ["both", "main", "small"]) { const b = B("bar2", v, () => { wview = v; frame(); }, () => wview === v); b.dataset.group = "weather"; }
+let rb = q.has("rainbow");
+{ const b = B("bar2", "rainbow", () => { rb = !rb; rainbow.setVisible(rb); refresh(); }, () => rb); b.dataset.group = "weather"; }
+{ const b = B("bar2", "night", () => { night = night ? 0 : 1; refresh(); }, () => night); b.dataset.group = "weather"; }
+wMain.setKind(kind); wSmall.setKind(q.get("kind2") || kind);
+rainbow.setVisible(rb);
+Object.assign(window, { THREE, scene, camera, controls, kitten, rider, wMain, wSmall, rainbow, city, wear, gridKits });
+wear(current);
+frame();
+
+// grid labels
+const labels = document.getElementById("labels");
+const lbl = gridKits.map(({ id }) => { const d = document.createElement("div"); d.className = "lbl"; d.textContent = `${OUTFITS[id].emoji} ${OUTFITS[id].name}`; labels.appendChild(d); return d; });
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+
+let tris = 0;
+const countOutfit = (id) => { const k = buildKitten(ctx); const h = attachOutfit(k, id, ctx); let n = 0; h.root.traverse((o) => { if (o.isMesh) n++; }); return n; };
+const counts = ids.map((id) => `${id}:${countOutfit(id)}`).join(" ");
+document.getElementById("info").textContent = `meshes per outfit (incl. outlines) — ${counts}`;
+
+let last = 0, nightK = night, blinkAt = 2, simT = 0;
+const v = new THREE.Vector3();
+function stepWeather(t, dt) {
+  nightK += ((night ? 1 : 0) - nightK) * Math.min(1, dt * 2);
+  city.setNight(nightK);
+  hemi.intensity = 1.8 - nightK * 1.1; sun.intensity = 2.2 - nightK * 1.7;
+  wMain.update(t, dt); wSmall.update(t, dt); rainbow.update(t);
+}
+// 后台标签页里 rAF 很慢：截图前可以 ff(2) 快进 2 秒
+window.ff = (sec) => { for (let i = 0; i < sec * 30; i++) { simT += 1 / 30; stepWeather(simT, 1 / 30); } };
+renderer.setAnimationLoop((ms) => {
+  const now = ms / 1000, dt = Math.min(0.1, now - last); last = now;
+  simT += dt;
+  const t = simT;
+  if (mode === "weather") stepWeather(t, dt);
+  ponyIdle(pony, anim ? t : 0); ponyIdle(turnPony, anim ? t : 0);
+  for (const [i, k] of [kitten, rider, ...gridKits.map((g) => g.k), islandKitten, ...turnKits, turnRider].entries()) {
+    if (sleep || k.sleepy) {
+      k.head.rotation.set(0.25, 0, Math.sin(t * 0.8) * 0.06 * anim);
+      k.setEyes("sleep");
+    } else {
+      k.head.rotation.x = 0;
+      k.head.rotation.z = anim ? Math.sin(t * 0.9 + i) * 0.08 : 0;
+      k.head.rotation.y = anim ? Math.sin(t * 0.4 + i) * 0.15 : 0;
+      k.tail.rotation.y = Math.sin(t * 2.2 + i) * 0.35;
+      if (t > blinkAt && anim) k.setEyes(t < blinkAt + 0.13 ? "sleep" : "open");
+      else if (!anim) k.setEyes("open");
+    }
+  }
+  if (t > blinkAt + 0.13) blinkAt = t + 2.5 + Math.random() * 3;
+  controls.update();
+  renderer.render(scene, camera);
+  if (mode === "grid") {
+    gridKits.forEach(({ k }, i) => {
+      v.copy(k.root.position).add(new THREE.Vector3(0, -0.25, 0)).project(camera);
+      lbl[i].style.display = "";
+      lbl[i].style.left = `${(v.x * 0.5 + 0.5) * innerWidth}px`;
+      lbl[i].style.top = `${(-v.y * 0.5 + 0.5) * innerHeight}px`;
+    });
+  } else lbl.forEach((d) => { d.style.display = "none"; });
+});
+</script>
+</body>
+</html>

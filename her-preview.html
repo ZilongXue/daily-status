@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kitten &amp; pony preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #f6f0f4; font: 14px system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  button { border: 1px solid #d9c2cf; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  button.on { background: #ffd9ea; }
+  #info { position: fixed; left: 8px; top: 8px; color: #806070; font-size: 12px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="info"></div>
+<div class="bar" id="bar"></div>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { buildKitten, buildPony, ponyWalk, ponyIdle, setRiding } from "./her3d.js";
+
+const q = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xf6f0f4);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.autoRotateSpeed = 1.5;
+
+// ---- 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(5, 8, 6);
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+
+const spots = { kitten: -2.4, pony: 0, ride: 2.6 };
+const grounds = {};
+for (const [k, x] of Object.entries(spots)) {
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(1.15, 32), toon(0x9ad978));
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.x = x;
+  scene.add(ground);
+  grounds[k] = ground;
+}
+
+const kitten = buildKitten({ toon, outlined });
+kitten.root.position.x = spots.kitten;
+const pony = buildPony({ toon, outlined });
+pony.root.position.x = spots.pony;
+const pony2 = buildPony({ toon, outlined });
+pony2.root.position.x = spots.ride;
+const rider = buildKitten({ toon, outlined });
+pony2.saddle.add(rider.root);
+setRiding(rider, true);
+scene.add(kitten.root, pony.root, pony2.root);
+Object.assign(window, { kitten, pony, pony2, rider, THREE, scene, camera, controls });
+
+let tris = 0;
+scene.traverse((o) => { if (o.isMesh && o.geometry.index) tris += o.geometry.index.count / 3; else if (o.isMesh) tris += o.geometry.attributes.position.count / 3; });
+document.getElementById("info").textContent = `≈ ${Math.round(tris / 1000)}k tris total (2 kittens + 2 ponies, incl. outlines)`;
+
+// ---- 镜头
+let focus = q.get("mode") || "all";
+let view = q.get("view") || "34";
+const VIEWS = { front: [0, 0.35, 1], "34": [0.75, 0.38, 0.75], side: [1, 0.3, 0], back: [0, 0.35, -1], other34: [-0.75, 0.38, 0.75] };
+function frame() {
+  const x = focus === "all" ? 0 : spots[focus];
+  const ty = focus === "ride" ? 1.25 : focus === "all" ? 0.9 : 0.8;
+  const dist = focus === "all" ? 13 : focus === "ride" ? 7 : 5.4;
+  const d = new THREE.Vector3(...VIEWS[view]).normalize().multiplyScalar(dist);
+  const roots = { kitten: kitten.root, pony: pony.root, ride: pony2.root };
+  for (const k of Object.keys(spots)) roots[k].visible = grounds[k].visible = focus === "all" || focus === k;
+  controls.target.set(x, ty, 0);
+  camera.position.set(x + d.x, ty + d.y, d.z);
+  controls.update();
+}
+frame();
+
+const bar = document.getElementById("bar");
+const btn = (label, fn) => { const b = document.createElement("button"); b.textContent = label; b.onclick = () => fn(b); bar.appendChild(b); return b; };
+for (const m of ["all", "kitten", "pony", "ride"]) btn(m, () => { focus = m; frame(); });
+for (const v of Object.keys(VIEWS)) btn(v, () => { view = v; frame(); });
+for (const s of ["open", "half", "happy", "sleep", "wide"]) btn(s, () => { for (const p of [kitten, rider, pony, pony2]) p.setEyes(s); });
+for (const k of ["cap", "bubble", "sweat", "yawn"]) btn(k, () => { kitten[k].visible = !kitten[k].visible; rider[k].visible = kitten[k].visible; });
+let walk = q.has("walk"), rotate = q.has("rotate"), anim = !q.has("still"), jingleT = -9, patT = -9;
+btn("walk", (b) => { walk = !walk; b.classList.toggle("on", walk); }).classList.toggle("on", walk);
+btn("rotate", (b) => { rotate = !rotate; b.classList.toggle("on", rotate); }).classList.toggle("on", rotate);
+btn("animate", (b) => { anim = !anim; b.classList.toggle("on", anim); }).classList.toggle("on", anim);
+btn("jingle", () => { jingleT = performance.now() / 1000; });
+btn("pat", () => { patT = performance.now() / 1000; });
+btn("ride on/off", () => { rider.legsOn = !rider.legsOn; setRiding(rider, !rider.legsOn); });
+
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+resize();
+
+let walkAmt = 0, phase = 0, last = 0, blinkAt = 2;
+renderer.setAnimationLoop((ms) => {
+  const t = ms / 1000, dt = Math.min(0.05, t - last); last = t;
+  controls.autoRotate = rotate;
+  walkAmt += ((walk ? 1 : 0) - walkAmt) * 0.08;
+  phase += dt * 9 * walkAmt;
+  for (const p of [pony, pony2]) {
+    if (anim) ponyIdle(p, t);
+    ponyWalk(p, phase, walkAmt);
+  }
+  if (anim) {
+    for (const [i, k] of [kitten, rider].entries()) {
+      k.head.rotation.z = Math.sin(t * 0.9 + i) * 0.08;
+      k.head.rotation.y = Math.sin(t * 0.4 + i) * 0.15;
+      k.tail.rotation.y = Math.sin(t * 2.2 + i) * 0.35;
+      k.body.rotation.z = Math.sin(t * 1.8 + i) * 0.04;
+      // 骑马时身体跟着颠一颠
+      if (k === rider) k.body.position.y = Math.abs(Math.sin(phase)) * 0.03 * walkAmt;
+      const js = t - jingleT;
+      k.bell.rotation.z = js < 1.2 ? Math.sin(js * 25) * 0.6 * (1 - js / 1.2) : 0;
+      const ps = t - patT;
+      k.paw.rotation.z = ps < 1.4 ? 2.3 + Math.sin(ps * 14) * 0.35 : 0.3;
+    }
+    if (t > blinkAt) { kitten.setEyes("sleep"); rider.setEyes("sleep"); pony.setEyes("sleep"); pony2.setEyes("sleep");
+      if (t > blinkAt + 0.13) { blinkAt = t + 2.5 + Math.random() * 3; for (const p of [kitten, rider, pony, pony2]) p.setEyes("open"); } }
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

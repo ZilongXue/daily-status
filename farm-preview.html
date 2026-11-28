@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Farm preview</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #d4f0fb; font: 14px system-ui, sans-serif; }
+  #c { display: block; width: 100%; height: 100%; }
+  .bar { position: fixed; left: 8px; right: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  button { border: 1px solid #b9cfd8; background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  button.on { background: #ffe3a8; }
+  #stat { position: fixed; top: 6px; left: 8px; font-size: 12px; color: #456; background: rgba(255,255,255,.7); padding: 4px 8px; border-radius: 6px; white-space: pre; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "./vendor/three.module.min.js",
+  "three/addons/": "./vendor/addons/"
+} }
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="stat"></div>
+<div class="bar" id="bar"></div>
+<script type="module">
+// ?view=all（默认）| near（3×2 小菜地 + 水壶 + 收获）| grid（4 阶段 × 7 作物）| small（岛上的远景距离）
+// ?focus=<cropId> 只看一种作物的 4 个阶段（近景）；?wilt=1 全部枯萎；?spin 慢慢转
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { CROPS, buildFarmPlot, buildCrop, buildWateringCan, buildWaterDrops, buildHarvestPop } from "./farm3d.js";
+
+const params = new URLSearchParams(location.search);
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0xd4f0fb);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(32, 1, 0.1, 100);
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+
+// 和 scene3d.js 一样的 toon / outlined
+const grad = new THREE.DataTexture(new Uint8Array([110, 185, 255]), 3, 1, THREE.RedFormat);
+grad.minFilter = grad.magFilter = THREE.NearestFilter;
+grad.needsUpdate = true;
+const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: grad, ...extra });
+function outlined(mesh, thickness = 0.04) {
+  const g = mesh.geometry.clone();
+  for (const k of Object.keys(g.attributes)) if (k !== "position") g.deleteAttribute(k);
+  const m = mergeVertices(g, 1e-4);
+  m.computeVertexNormals();
+  const mat = new THREE.MeshBasicMaterial({ color: 0x4a2f25, side: THREE.BackSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.thickness = { value: thickness };
+    sh.vertexShader = "uniform float thickness;\n" + sh.vertexShader.replace(
+      "#include <begin_vertex>", "#include <begin_vertex>\ntransformed += normalize(normal) * thickness;");
+  };
+  const o = new THREE.Mesh(m, mat);
+  o.raycast = () => {};
+  mesh.add(o);
+  return mesh;
+}
+const T = { toon, outlined };
+
+const hemi = new THREE.HemisphereLight(0xe3f4ff, 0x76a060, 1.8);
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(4, 8, 5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -6, right: 6, top: 6, bottom: -6, near: 0.5, far: 30 });
+sun.shadow.bias = -0.0005;
+const fill = new THREE.DirectionalLight(0xffffff, 0.5);
+fill.position.set(0, 0.4, 1);
+camera.add(fill);
+scene.add(hemi, sun, camera);
+
+// 草地
+const grass = new THREE.Mesh(new THREE.CircleGeometry(9, 48).rotateX(-Math.PI / 2), toon(0x9ad978));
+grass.receiveShadow = true;
+scene.add(grass);
+
+function label(text, color = "#7aa36a", w = 0.5) {
+  const cv = document.createElement("canvas");
+  cv.width = 256; cv.height = 72;
+  const g = cv.getContext("2d");
+  g.fillStyle = color;
+  g.beginPath(); g.roundRect(6, 6, 244, 60, 28); g.fill();
+  g.fillStyle = "#fff"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.font = "bold 30px system-ui, 'PingFang SC', sans-serif";
+  g.fillText(text, 128, 38);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex }));
+  sp.scale.set(w, w * 72 / 256, 1);
+  return sp;
+}
+
+const view = params.get("view") || (params.get("focus") ? "focus" : "all");
+const focus = params.get("focus");
+const ids = Object.keys(CROPS).filter((id) => !focus || id === focus);
+const crops = []; // { id, stage, c }
+const animated = [];
+
+// ---- 大菜地：列 = 阶段 0..3，行 = 作物
+const grid = buildFarmPlot({ cols: 4, rows: ids.length, cell: 0.6, ...T });
+grid.root.position.set(view === "near" ? -50 : focus ? 0 : -1.55, 0, 0);
+scene.add(grid.root);
+ids.forEach((id, r) => {
+  for (let s = 0; s < 4; s++) {
+    const c = buildCrop(id, s, T);
+    grid.cells[r * 4 + s].add(c.root);
+    crops.push({ id, stage: s, c });
+    console.log(`${id} stage ${s} size ${c.size.toArray().map((v) => v.toFixed(3)).join(" x ")} height ${c.height.toFixed(3)}`);
+  }
+  const lb = label(`${CROPS[id].emoji} ${CROPS[id].name}`, "#7aa36a", 0.55);
+  lb.position.set(-grid.width / 2 - 0.36, 0.2, grid.cells[r * 4].position.z);
+  grid.root.add(lb);
+});
+["种子", "发芽", "长大", "成熟"].forEach((t, s) => {
+  const lb = label(`${s} ${t}`, "#c6956a", 0.42);
+  lb.position.set(grid.cells[s].position.x, 0.95, -grid.depth / 2 - 0.1);
+  grid.root.add(lb);
+});
+
+// ---- 默认 3×2 小菜地：成熟作物 + 水壶 + 收获
+const plot = buildFarmPlot(T);
+plot.root.position.set(view === "near" ? 0 : 2.25, 0, focus ? 50 : view === "near" ? 0 : -0.9);
+scene.add(plot.root);
+const mix = ["tomato", "sunflower", "pumpkin", "strawberry", "carrot", "tulip"];
+const plotCrops = mix.map((id, i) => { const c = buildCrop(id, i === 4 ? 1 : 3, T); plot.cells[i].add(c.root); crops.push({ id, stage: 3, c, plot: true }); return c; });
+const plb = label("默认 3×2", "#c6956a", 0.45);
+plb.position.set(0, 1.05, -0.8);
+plot.root.add(plb);
+
+const can = buildWateringCan(T);
+const canPivot = new THREE.Group();
+canPivot.add(can.root);
+plot.root.add(canPivot);
+const drops = buildWaterDrops();
+plot.root.add(drops.root);
+const water = plot.cells[4]; // 浇前排中间那格（胡萝卜苗）
+canPivot.position.set(water.position.x - 0.26, water.position.y + 0.5, water.position.z + 0.08);
+
+const pop = buildHarvestPop(T);
+const popCell = plot.cells[5]; // 前排右边（郁金香）
+popCell.add(pop.root);
+
+// 水壶单独再放一个大的（看清楚样子）
+const can2 = buildWateringCan(T);
+can2.root.scale.setScalar(1.6);
+can2.root.position.set(view === "near" ? -50 : 2.25, 0.62, 1.15);
+can2.root.rotation.y = -0.5;
+scene.add(can2.root);
+const tipMark = new THREE.Mesh(new THREE.SphereGeometry(0.01, 6, 4), new THREE.MeshBasicMaterial({ color: 0x00aa00 }));
+can2.spout.add(tipMark);
+
+scene.traverse((o) => { if (o.isMesh && !o.material.side && o !== grass) o.castShadow = true; });
+
+// ---- 统计（每株的网格数）
+const meshCount = (o) => { let n = 0; o.traverse((m) => { if (m.isMesh) n++; }); return n; };
+const counts = crops.filter((x) => !x.plot).map((x) => `${x.id}/${x.stage}:${meshCount(x.c.root)}`);
+const plotMeshes = (() => { let n = 0; plot.root.children.forEach((c) => { if (c.isMesh) n += meshCount(c); }); return n; })();
+console.log("meshes per crop", counts.join(" "));
+console.log("plot meshes", plotMeshes, "can meshes", meshCount(can2.root), "surfaceY", plot.surfaceY.toFixed(3), "plot size", plot.width.toFixed(2), plot.depth.toFixed(2));
+const maxCrop = Math.max(...crops.map((x) => meshCount(x.c.root)));
+
+// ---- 按钮
+const bar = document.getElementById("bar");
+const btn = (text, fn) => { const b = document.createElement("button"); b.textContent = text; b.onclick = () => fn(b); bar.appendChild(b); return b; };
+const wilt = {};
+for (const id of Object.keys(CROPS)) {
+  wilt[id] = params.get("wilt") === "1";
+  btn(`${CROPS[id].emoji} 蔫`, (b) => { wilt[id] = !wilt[id]; b.classList.toggle("on", wilt[id]); for (const x of crops) if (x.id === id) x.c.setWilted(wilt[id]); });
+}
+btn("全部蔫/好", () => { const on = !Object.values(wilt).every(Boolean); for (const id in wilt) wilt[id] = on; for (const x of crops) x.c.setWilted(on); [...bar.children].slice(0, 7).forEach((b) => b.classList.toggle("on", on)); });
+let pouring = 0;
+btn("💧 浇水", () => { pouring = 0.001; });
+btn("✨ 收获", () => harvest());
+if (params.get("wilt") === "1") { for (const x of crops) x.c.setWilted(true, false); [...bar.children].slice(0, 7).forEach((b) => b.classList.add("on")); }
+window.crops = crops;
+
+let regrowT = -1;
+function harvest() {
+  const tulip = plotCrops[5];
+  tulip.root.visible = false;
+  pop.play("tulip");
+  regrowT = 2.2;
+}
+
+// ---- 相机
+function place() {
+  const tn = Math.tan(THREE.MathUtils.degToRad(16));
+  let W, H, tgt, elev = 0.52;
+  if (view === "near") { W = 2.5; H = 1.75; tgt = V3(0, 0.28, 0.05); elev = 0.45; }
+  else if (view === "focus" && params.has("stage")) { const c = grid.cells[+params.get("stage")]; W = 0.75; H = 0.85; tgt = V3(c.position.x, 0.35, c.position.z); elev = 0.35; }
+  else if (view === "focus") { W = grid.width + 0.1; H = 0.95; tgt = V3(0, 0.3, 0); elev = 0.38; }
+  else if (view === "grid") { W = grid.width + 1.0; H = grid.depth * 0.75 + 1.0; tgt = V3(grid.root.position.x - 0.2, 0.25, 0); }
+  else if (view === "can") { W = 0.9; H = 0.7; tgt = can2.root.position.clone().add(V3(0.1, -0.15, 0)); elev = 0.3; }
+  else if (view === "small") { W = 0; H = 0; tgt = V3(1.0, 0.3, 0); }
+  else { W = 7.8; H = grid.depth * 0.72 + 0.9; tgt = V3(-0.3, 0.25, 0); }
+  let dist = Math.max(H / (2 * tn), W / (2 * tn * camera.aspect));
+  if (view === "small") { dist = 15.7; elev = 0.44; }
+  controls.target.copy(tgt);
+  camera.position.set(tgt.x, tgt.y + Math.sin(elev) * dist, tgt.z + Math.cos(elev) * dist);
+  controls.update();
+}
+function V3(x, y, z) { return new THREE.Vector3(x, y, z); }
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  place();
+}
+addEventListener("resize", resize);
+resize();
+
+const clock = new THREE.Clock();
+let frames = 0, fpsT = 0, autoT = 0;
+const st = document.getElementById("stat");
+const spoutW = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(0.05, clock.getDelta());
+  const t = clock.elapsedTime;
+  for (const x of crops) x.c.root.userData.anim(t);
+  if (params.has("spin")) { grid.root.rotation.y = t * 0.3; }
+  // 自动循环：每 4 秒浇一次水，每 5 秒收获一次
+  autoT += dt;
+  if (!params.has("still")) {
+    if (Math.floor(autoT / 4) !== Math.floor((autoT - dt) / 4)) pouring = 0.001;
+    if (Math.floor((autoT + 2.5) / 5) !== Math.floor((autoT + 2.5 - dt) / 5) && regrowT < 0) harvest();
+  }
+  // 水壶：倾斜 → 出水 → 回正
+  if (pouring > 0) {
+    pouring += dt;
+    const k = pouring < 0.35 ? pouring / 0.35 : pouring < 1.6 ? 1 : Math.max(0, 1 - (pouring - 1.6) / 0.35);
+    can.root.rotation.z = -0.65 * k;
+    if (pouring > 0.3 && !drops.active && pouring < 0.5) drops.play();
+    if (pouring > 2.0) pouring = 0;
+  }
+  can.root.position.y = Math.sin(t * 2) * 0.01;
+  can.root.updateMatrixWorld(true);
+  can.spout.getWorldPosition(spoutW);
+  plot.root.worldToLocal(spoutW);
+  drops.root.position.copy(spoutW);
+  drops.fall = Math.max(0.05, spoutW.y - plot.surfaceY);
+  drops.update(dt);
+  pop.update(dt);
+  if (regrowT > 0) { regrowT -= dt; if (regrowT <= 0) { plotCrops[5].root.visible = true; regrowT = -1; } }
+  frames++; fpsT += dt;
+  if (fpsT > 1) { st.textContent = `${Math.round(frames / fpsT)} fps · ${renderer.info.render.calls} draws · ${Math.round(renderer.info.render.triangles)} tris\nmax meshes/crop ${maxCrop} · plot ${plotMeshes} · can ${meshCount(can2.root)}`; frames = 0; fpsT = 0; }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
